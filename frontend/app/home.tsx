@@ -1,0 +1,244 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Text } from 'react-native';
+import { router } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
+import { AnalysisConfirmSheet } from '@/src/components/analysis-confirm-sheet';
+import { AppButton, commonStyles, ListingCard, ScreenContainer, SectionHeader } from '@/src/components/common';
+import { HomeAnalysisInput } from '@/src/components/home-analysis-input';
+import { createMockAnalysis } from '@/src/services/analysis-service';
+import { getRecentListings, getSavedListings } from '@/src/services/listing-service';
+import { AnalysisDraft, SelectedImage } from '@/src/types/analysis-input';
+import { Listing } from '@/src/types/marketplace';
+import { canSubmitAnalysisDraft, resetAnalysisDraft } from '@/src/utils/analysis-draft';
+import { getUrlError, normalizeUrl } from '@/src/utils/url-validation';
+
+export default function HomeScreen() {
+  const [url, setUrl] = useState('');
+  const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [isPasting, setIsPasting] = useState(false);
+  const [isPickingImage, setIsPickingImage] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [recent, setRecent] = useState<Listing[]>([]);
+  const [saved, setSaved] = useState<Listing[]>([]);
+  const [pendingInput, setPendingInput] = useState<AnalysisDraft | null>(null);
+  const [sheetVisible, setSheetVisible] = useState(false);
+
+  const candidate = recent[0];
+  const normalizedUrl = normalizeUrl(url);
+  const canAnalyze = canSubmitAnalysisDraft(
+    { url: normalizedUrl, image: selectedImage },
+    isSubmitting,
+  );
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([getRecentListings(), getSavedListings()])
+      .then(([recentItems, savedItems]) => {
+        if (active) {
+          setRecent(recentItems);
+          setSaved(savedItems);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setInputError('매물 목록을 불러오지 못했습니다. 다시 시도해 주세요.');
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const draftListing = useMemo(() => {
+    if (!candidate || !pendingInput) {
+      return undefined;
+    }
+    return {
+      ...candidate,
+      sourceUrl: normalizeUrl(pendingInput.url) || candidate.sourceUrl,
+      imageUrl: pendingInput.image?.uri ?? candidate.imageUrl,
+    };
+  }, [candidate, pendingInput]);
+
+  const changeUrl = (value: string): void => {
+    const normalizedValue = normalizeUrl(value);
+    setUrl(normalizedValue);
+    setUrlError(getUrlError(normalizedValue));
+    setInputError(null);
+  };
+
+  const pasteUrl = async (): Promise<void> => {
+    if (isPasting) {
+      return;
+    }
+
+    setIsPasting(true);
+    setInputError(null);
+    try {
+      const clipboardText = normalizeUrl(await Clipboard.getStringAsync());
+      if (clipboardText.length === 0) {
+        setInputError('클립보드에 붙여넣을 링크가 없어요.');
+        return;
+      }
+      setUrl(clipboardText);
+      setUrlError(getUrlError(clipboardText));
+    } catch {
+      setInputError('클립보드 내용을 가져오지 못했습니다.');
+      Alert.alert('붙여넣기 실패', '클립보드 내용을 가져오지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setIsPasting(false);
+    }
+  };
+
+  const pickImage = async (): Promise<void> => {
+    if (isPickingImage) {
+      return;
+    }
+
+    setIsPickingImage(true);
+    setInputError(null);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setInputError('이미지를 선택하려면 사진 접근 권한이 필요합니다.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: false,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      if (!asset) {
+        throw new Error('Selected image is missing');
+      }
+
+      setSelectedImage({
+        uri: asset.uri,
+        fileName: asset.fileName ?? undefined,
+        mimeType: asset.mimeType ?? undefined,
+        width: asset.width,
+        height: asset.height,
+      });
+      setInputError(null);
+    } catch {
+      setInputError('이미지를 선택하지 못했습니다.');
+      Alert.alert('이미지 선택 실패', '이미지를 선택하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setIsPickingImage(false);
+    }
+  };
+
+  const removeImage = (): void => {
+    setSelectedImage(null);
+    setInputError(null);
+  };
+
+  const resetInput = (): void => {
+    const emptyDraft = resetAnalysisDraft();
+    setUrl(emptyDraft.url);
+    setSelectedImage(emptyDraft.image);
+    setUrlError(null);
+    setInputError(null);
+    setIsPasting(false);
+    setIsPickingImage(false);
+    setIsSubmitting(false);
+    setPendingInput(null);
+    setSheetVisible(false);
+  };
+
+  const prepareAnalysis = (): void => {
+    const finalUrl = normalizeUrl(url);
+    const finalUrlError = getUrlError(finalUrl);
+    setUrl(finalUrl);
+    setUrlError(finalUrlError);
+    setInputError(null);
+
+    if (finalUrlError) {
+      return;
+    }
+    if (finalUrl.length === 0 && selectedImage === null) {
+      setInputError('URL 또는 이미지를 하나 이상 입력해 주세요.');
+      return;
+    }
+    if (!candidate) {
+      setInputError('분석 준비 정보를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
+      return;
+    }
+
+    const input: AnalysisDraft = {
+      url: finalUrl,
+      image: selectedImage,
+    };
+    setPendingInput(input);
+    setSheetVisible(true);
+  };
+
+  const submitAnalysis = async (listing: Listing): Promise<void> => {
+    if (!pendingInput || isSubmitting) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setInputError(null);
+    try {
+      // TODO: 백엔드 분석 API 연결 시 pendingInput과 확인된 listing 정보를 전송하도록 교체
+      const result = await createMockAnalysis(listing);
+      setSheetVisible(false);
+      router.push(`/analysis/${result.id}`);
+    } catch {
+      setInputError('분석을 시작하지 못했습니다.');
+      Alert.alert('분석 요청 실패', '분석을 시작하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <ScreenContainer>
+      <Text style={commonStyles.title}>매물 분석</Text>
+      <Text style={commonStyles.subtitle}>URL 또는 매물 이미지를 입력해 분석을 시작하세요.</Text>
+      <HomeAnalysisInput
+        url={url}
+        selectedImage={selectedImage}
+        urlError={urlError}
+        inputError={inputError}
+        isPasting={isPasting}
+        isPickingImage={isPickingImage}
+        isSubmitting={isSubmitting}
+        canAnalyze={canAnalyze}
+        onUrlChange={changeUrl}
+        onPaste={pasteUrl}
+        onPickImage={pickImage}
+        onRemoveImage={removeImage}
+        onReset={resetInput}
+        onAnalyze={prepareAnalysis}
+        onImageLoadError={() => setInputError('이미지를 불러오지 못했습니다. 다시 선택해 주세요.')}
+      />
+      <SectionHeader title="최근 분석" />
+      {recent.map((listing) => <ListingCard key={listing.id} listing={listing} />)}
+      <SectionHeader title="저장한 매물" />
+      {saved.slice(0, 2).map((listing) => <ListingCard key={listing.id} listing={listing} />)}
+      <AppButton title="마이페이지" variant="secondary" onPress={() => router.push('/mypage')} />
+      {draftListing && (
+        <AnalysisConfirmSheet
+          visible={sheetVisible}
+          listing={draftListing}
+          isAnalyzing={isSubmitting}
+          onClose={() => setSheetVisible(false)}
+          onAnalyze={submitAnalysis}
+        />
+      )}
+    </ScreenContainer>
+  );
+}
