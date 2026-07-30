@@ -16,7 +16,7 @@ import { createMockAnalysis } from '@/src/services/analysis-service';
 import { getRecentListings } from '@/src/services/listing-service';
 import { AnalysisDraft, SelectedImage } from '@/src/types/analysis-input';
 import { Listing } from '@/src/types/marketplace';
-import { getUrlError, normalizeUrl } from '@/src/utils/url-validation';
+import { extractFirstHttpUrl } from '@/src/utils/url-validation';
 
 export default function HomeScreen() {
   const [inputError, setInputError] = useState<string | null>(null);
@@ -77,19 +77,16 @@ export default function HomeScreen() {
     setIsPasting(true);
     setInputError(null);
     try {
-      const clipboardText = normalizeUrl(await Clipboard.getStringAsync());
-      if (clipboardText.length === 0) {
-        setInputError('클립보드에 붙여넣을 링크가 없어요.');
+      const clipboardUrl = extractFirstHttpUrl(await Clipboard.getStringAsync());
+      if (!clipboardUrl) {
+        setInputError('클립보드에서 올바른 링크를 찾지 못했어요.');
         return;
       }
 
-      const urlError = getUrlError(clipboardText);
-      if (urlError) {
-        setInputError(urlError);
-        return;
-      }
-
-      openConfirmation({ url: clipboardText, image: null });
+      router.push({
+        pathname: '/analysis-input',
+        params: { url: clipboardUrl },
+      });
     } catch {
       setInputError('클립보드 내용을 가져오지 못했습니다.');
       Alert.alert('붙여넣기 실패', '클립보드 내용을 가져오지 못했습니다. 다시 시도해 주세요.');

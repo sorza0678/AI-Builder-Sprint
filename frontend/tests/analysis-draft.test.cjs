@@ -21,6 +21,7 @@ const {
   resetAnalysisDraft,
 } = require('../src/utils/analysis-draft.ts');
 const {
+  extractFirstHttpUrl,
   isValidUrl,
   normalizeUrl,
 } = require('../src/utils/url-validation.ts');
@@ -35,6 +36,23 @@ const selectedImage = {
 
 test('normalizeUrl removes leading and trailing whitespace', () => {
   assert.equal(normalizeUrl('  https://example.com/item  \n'), 'https://example.com/item');
+});
+
+test('extractFirstHttpUrl removes surrounding clipboard text and whitespace', () => {
+  assert.equal(
+    extractFirstHttpUrl('이 상품을 확인해 보세요.\n https://example.com/item/12345 \n감사합니다.'),
+    'https://example.com/item/12345',
+  );
+  assert.equal(
+    extractFirstHttpUrl('링크(https://example.com/item?id=1).'),
+    'https://example.com/item?id=1',
+  );
+});
+
+test('extractFirstHttpUrl rejects clipboard text without a valid HTTP(S) URL', () => {
+  assert.equal(extractFirstHttpUrl('링크가 없습니다.'), null);
+  assert.equal(extractFirstHttpUrl('ftp://example.com/item'), null);
+  assert.equal(extractFirstHttpUrl('https://'), null);
 });
 
 test('isValidUrl allows empty values and valid HTTP(S) URLs', () => {
