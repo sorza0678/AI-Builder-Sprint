@@ -134,3 +134,142 @@ class InquiryScriptSuccess(BaseModel):
     ok: Literal[True] = True
     data: InquiryScriptData
     error: None = None
+
+
+# ---------- /transaction (화면5 구매 결정 저장) ----------
+
+TransactionStatusEnum = Literal["PLANNED", "CONTACTED", "ON_HOLD", "COMPLETED", "EXCLUDED"]
+
+
+class TransactionRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+    status: TransactionStatusEnum = Field(examples=["PLANNED"])
+
+
+class TransactionData(BaseModel):
+    item_id: int
+    status: TransactionStatusEnum
+    updated_at: datetime
+
+
+class TransactionSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: TransactionData
+    error: None = None
+
+
+class TransactionListItem(BaseModel):
+    item_id: int
+    title: str
+    price: int
+    trust_score: int
+    risk_level: RiskLevel
+    status: TransactionStatusEnum
+    updated_at: datetime
+
+
+class TransactionListData(BaseModel):
+    items: list[TransactionListItem]
+    total: int
+
+
+class TransactionListSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: TransactionListData
+    error: None = None
+
+
+# ---------- /comparison (비교 후보 목록) ----------
+
+class ComparisonAddRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+
+
+class ComparisonAddData(BaseModel):
+    item_id: int
+    added: bool = Field(description="새로 추가되면 true, 이미 후보에 있었으면 false")
+
+
+class ComparisonAddSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: ComparisonAddData
+    error: None = None
+
+
+class ComparisonRemoveData(BaseModel):
+    item_id: int
+    removed: bool
+
+
+class ComparisonRemoveSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: ComparisonRemoveData
+    error: None = None
+
+
+class ComparisonListData(BaseModel):
+    items: list[AnalyzeData]
+    total: int
+
+
+class ComparisonListSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: ComparisonListData
+    error: None = None
+
+
+# ---------- /bookmark (찜) ----------
+
+class BookmarkRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+
+
+class BookmarkData(BaseModel):
+    item_id: int
+    bookmarked: bool = Field(description="새로 찜하면 true, 이미 찜해둔 상태였으면 false")
+
+
+class BookmarkSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: BookmarkData
+    error: None = None
+
+
+class BookmarkRemoveData(BaseModel):
+    item_id: int
+    removed: bool
+
+
+class BookmarkRemoveSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: BookmarkRemoveData
+    error: None = None
+
+
+class BookmarkListData(BaseModel):
+    items: list[AnalyzeData]
+    total: int
+
+
+class BookmarkListSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: BookmarkListData
+    error: None = None
+
+
+# ---------- /mypage ----------
+
+class MyPageData(BaseModel):
+    analysis_count: int
+    bookmark_count: int
+    comparison_count: int
+    transaction_completed_count: int
+
+
+class MyPageSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: MyPageData
+    error: None = None
