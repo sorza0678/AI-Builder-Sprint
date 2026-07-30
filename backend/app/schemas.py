@@ -1,0 +1,136 @@
+"""API 요청/응답 스키마. /docs(Swagger)가 이 파일로 자동 생성된다.
+
+팀 공통 응답 형식 (backend/AGENTS.md):
+  성공 { "ok": true,  "data": {...}, "error": null }
+  실패 { "ok": false, "data": null,  "error": {"code": "...", "message": "..."} }
+"""
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+RiskLevel = Literal["SAFE", "WARNING", "DANGER"]
+
+
+# ---------- 공통 ----------
+
+class ErrorBody(BaseModel):
+    code: str = Field(examples=["SCRAPE_FAILED"])
+    message: str = Field(examples=["매물 페이지를 불러오지 못했습니다."])
+
+
+class ErrorResponse(BaseModel):
+    ok: Literal[False] = False
+    data: None = None
+    error: ErrorBody
+
+
+# ---------- /analyze ----------
+
+class AnalyzeRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    url: str = Field(examples=["https://www.daangn.com/articles/123456"])
+
+
+class ProductStatus(BaseModel):
+    defects_found: list[str]
+    missing_components: list[str]
+
+
+class AnalyzeData(BaseModel):
+    item_id: int
+    title: str
+    price: int
+    market_price_avg: int
+    trust_score: int = Field(ge=0, le=100)
+    risk_level: RiskLevel
+    scam_warnings: list[str]
+    product_status: ProductStatus
+
+
+class AnalyzeSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: AnalyzeData
+    error: None = None
+
+
+# ---------- /history ----------
+
+class HistoryItem(BaseModel):
+    item_id: int
+    source_url: str
+    title: str
+    price: int
+    trust_score: int
+    risk_level: RiskLevel
+    created_at: datetime
+
+
+class HistoryData(BaseModel):
+    items: list[HistoryItem]
+    page: int
+    size: int
+    total: int
+
+
+class HistorySuccess(BaseModel):
+    ok: Literal[True] = True
+    data: HistoryData
+    error: None = None
+
+
+# ---------- /compare ----------
+
+class CompareRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_ids: list[int] = Field(min_length=2, max_length=3, examples=[[1, 2]])
+
+
+class CompareData(BaseModel):
+    items: list[AnalyzeData]
+    recommendation: str = Field(
+        description="어느 매물이 나은지 한 줄 코멘트",
+        examples=["1번 매물이 시세 대비 합리적이고 신뢰도가 가장 높습니다."],
+    )
+
+
+class CompareSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: CompareData
+    error: None = None
+
+
+# ---------- /checklist ----------
+
+class ChecklistRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+
+
+class ChecklistData(BaseModel):
+    item_id: int
+    checklist: list[str]
+
+
+class ChecklistSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: ChecklistData
+    error: None = None
+
+
+# ---------- /inquiry-script ----------
+
+class InquiryScriptRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+
+
+class InquiryScriptData(BaseModel):
+    item_id: int
+    script: str
+
+
+class InquiryScriptSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: InquiryScriptData
+    error: None = None
