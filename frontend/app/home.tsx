@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AnalysisConfirmSheet } from '@/src/components/analysis-confirm-sheet';
 import { HomeAnalysisInput } from '@/src/components/home-analysis-input';
 import { HomeHeader } from '@/src/components/home-header';
+import { HomeSidebar } from '@/src/components/home-sidebar';
 import { colors } from '@/src/constants/theme';
 import { createMockAnalysis } from '@/src/services/analysis-service';
 import { getRecentListings } from '@/src/services/listing-service';
@@ -25,6 +26,7 @@ export default function HomeScreen() {
   const [recent, setRecent] = useState<Listing[]>([]);
   const [pendingInput, setPendingInput] = useState<AnalysisDraft | null>(null);
   const [sheetVisible, setSheetVisible] = useState(false);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
 
   const candidate = recent[0];
 
@@ -163,7 +165,7 @@ export default function HomeScreen() {
   };
 
   const handleMenuPress = (): void => {
-    // TODO: 홈 메뉴 목적지와 표시 방식이 확정되면 연결
+    setSidebarVisible(true);
   };
 
   const handleHeaderActionPress = (): void => {
@@ -237,6 +239,10 @@ export default function HomeScreen() {
           onAnalyze={submitAnalysis}
         />
       )}
+      <HomeSidebar
+        visible={sidebarVisible}
+        onClose={() => setSidebarVisible(false)}
+      />
     </View>
   );
 }
