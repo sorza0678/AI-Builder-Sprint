@@ -55,6 +55,17 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 ⚠️ 경로 이름이 역할표와 다름(`/checklist`·`/inquiry-script`로 구현됨) — 통일 필요하면 팀 논의.
 `/history`는 역할표상 B 소관이지만 현재 A가 분석 히스토리 조회용으로 임시 제공 중 — B 서비스로 이관/통합 여부 논의 필요.
 
+### Backend B 엔드포인트 (구현 완료 — 2026-07-31, `feat/service-api` 브랜치)
+
+> 화면5(거래 준비)·화면6(마이페이지) 대응. 공통 `{ok,data,error}` 형식 동일, `item_id` 기준 404 `ITEM_NOT_FOUND` 처리 동일.
+
+- `POST/GET /api/v1/transaction` — 거래 상태 등록(upsert, 매물당 1개)/목록 조회(`status` 쿼리로 필터). `status`: `PLANNED|CONTACTED|ON_HOLD|COMPLETED|EXCLUDED`
+- `POST/DELETE/GET /api/v1/comparison` — 비교 후보 목록 추가/제거/조회
+- `POST/DELETE/GET /api/v1/bookmark` — 찜 추가/제거/조회 (`bookmarks` 테이블은 A가 이미 생성, 엔드포인트는 B가 구현)
+- `GET /api/v1/mypage` — 상단 요약 `{analysis_count, bookmark_count, comparison_count, transaction_completed_count}` — 별도 집계 테이블 없이 기존/신규 테이블 COUNT 쿼리로 구성
+
+미착수: `/listing`(범위 논의 필요 — A의 Document Parse 파이프라인과 역할이 겹칠 수 있음). 테스트 `backend/tests/test_service_endpoints.py` (11개) 참고.
+
 ## 공통 규칙
 
 ### API 응답 형식
@@ -100,18 +111,22 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ## 데이터베이스
 
-### 현재 구축됨 (A, SQLite — `backend/app/schema.sql`)
+### 현재 구축됨 (SQLite — `backend/app/schema.sql`)
 
 - `users(id TEXT PK, created_at)` — user_id는 프론트가 보내는 문자열 (인증 없음)
 - `analysis_history(id, user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json, created_at)` — 분석결과 통째로 JSON 저장, 모든 후속 API가 재사용 (LLM 재호출 금지)
-- `bookmarks(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id)
+- `bookmarks(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) — A 생성, B가 `/bookmark` 엔드포인트 구현
+- `transaction_status(id, user_id, analysis_id, status, created_at, updated_at)` — UNIQUE(user_id, analysis_id), `status` CHECK 5종 (B, 2026-07-31)
+- `comparison_items(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) — bookmarks와 동일 구조 (B, 2026-07-31)
 
 로컬 파일 `backend/resale_guard.db` (gitignore). 스키마는 Supabase(PostgreSQL) 호환으로 작성됨 —
 전환 시 `raw_analysis_json TEXT` → `JSONB`, `AUTOINCREMENT` → `BIGSERIAL`만 바꾸면 된다 (`DATABASE_URL`은 `.env`).
+FK 제약은 `PRAGMA foreign_keys=ON`으로 실제 적용됨 (2026-07-31 수정 — 이전엔 선언만 되고 sqlite3 기본값 때문에 무시되고 있었음).
 
-### Backend B 소관 테이블 (TBD)
+### 미확정 / 논의 필요
 
-> 스키마 확정 후 채우기: 매물, 찜(위 bookmarks 재사용 가능), 비교목록, 거래상태, 마이페이지 집계용 테이블
+- `/listing` 전용 테이블 — 매물 원본 정보(모델명·연식·색상 등 화면2 추출 필드) 저장 필요 여부, A의 Document Parse 파이프라인과 역할 겹침 여부
+- `/history`를 B로 이관할지 — 현재 A가 임시 제공 중 (위 "Backend B 엔드포인트" 절 참고)
 
 ### Git 작업
 - 에이전트는 `git commit`, `git push`를 스스로 판단해서 실행하지 않는다
