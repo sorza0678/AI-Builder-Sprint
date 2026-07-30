@@ -6,6 +6,7 @@ import {
 import { colors, radius, spacing } from '@/src/constants/theme';
 import { Listing } from '@/src/types/marketplace';
 
+// 모든 화면에 공통 배경, 안전 영역, 선택적 스크롤을 적용합니다.
 export function ScreenContainer({ children, scroll = true }: { children: ReactNode; scroll?: boolean }) {
   const content = scroll
     ? <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">{children}</ScrollView>
@@ -13,6 +14,7 @@ export function ScreenContainer({ children, scroll = true }: { children: ReactNo
   return <SafeAreaView style={styles.safe}>{content}</SafeAreaView>;
 }
 
+// 버튼 스타일과 비활성화·눌림·접근성 처리를 한곳에서 관리합니다.
 export function AppButton({ title, onPress, disabled = false, variant = 'primary', accessibilityLabel }: {
   title: string; onPress: () => void; disabled?: boolean; variant?: 'primary' | 'secondary' | 'danger';
   accessibilityLabel?: string;
@@ -32,6 +34,7 @@ export function AppButton({ title, onPress, disabled = false, variant = 'primary
   );
 }
 
+// 앱 입력창의 기본 색상과 스타일을 재사용합니다.
 export function AppTextInput(props: TextInputProps) {
   return <TextInput placeholderTextColor={colors.muted} {...props} style={[styles.input, props.style]} />;
 }
