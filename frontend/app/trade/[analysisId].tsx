@@ -192,17 +192,31 @@ function QuestionCard({
 function CheckStepContent() {
   const [method, setMethod] = useState<TradeMethod>('inPerson');
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [excludedIds, setExcludedIds] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>(['seller-identity']);
 
   const toggleChecked = (item: TradeChecklistItem): void => {
     if (isChecklistItemDisabled(item, method)) {
       return;
     }
-    setCheckedIds((current) =>
-      current.includes(item.id)
-        ? current.filter((id) => id !== item.id)
-        : [...current, item.id],
-    );
+    const checked = checkedIds.includes(item.id);
+    const excluded = excludedIds.includes(item.id);
+
+    if (!checked && !excluded) {
+      setCheckedIds((current) => [...current, item.id]);
+      return;
+    }
+
+    if (checked) {
+      setCheckedIds((current) => current.filter((id) => id !== item.id));
+      setExcludedIds((current) => [...current, item.id]);
+      setExpandedIds((current) => current.filter((id) => id !== item.id));
+      return;
+    }
+
+    if (excluded) {
+      setExcludedIds((current) => current.filter((id) => id !== item.id));
+    }
   };
 
   const toggleExpanded = (item: TradeChecklistItem): void => {
@@ -219,6 +233,12 @@ function CheckStepContent() {
   const selectMethod = (nextMethod: TradeMethod): void => {
     setMethod(nextMethod);
     setCheckedIds((current) =>
+      current.filter((id) => {
+        const item = TRADE_CHECKLIST_ITEMS.find((candidate) => candidate.id === id);
+        return item ? !isChecklistItemDisabled(item, nextMethod) : false;
+      }),
+    );
+    setExcludedIds((current) =>
       current.filter((id) => {
         const item = TRADE_CHECKLIST_ITEMS.find((candidate) => candidate.id === id);
         return item ? !isChecklistItemDisabled(item, nextMethod) : false;
@@ -276,8 +296,10 @@ function CheckStepContent() {
                 {TRADE_CHECKLIST_ITEMS.filter((item) => item.group === group.key).map(
                   (item, index, groupItems) => {
                     const checked = checkedIds.includes(item.id);
+                    const excluded = excludedIds.includes(item.id);
                     const expanded = expandedIds.includes(item.id);
                     const disabled = isChecklistItemDisabled(item, method);
+                    const muted = disabled || excluded;
                     const copy = getChecklistCopy(item, method);
                     return (
                       <View
@@ -290,14 +312,14 @@ function CheckStepContent() {
                           <Pressable
                             accessibilityLabel={`${copy.text} ${checked ? '완료 해제' : '완료'}`}
                             accessibilityRole="checkbox"
-                            accessibilityState={{ checked, disabled }}
+                            accessibilityState={{ checked: excluded ? 'mixed' : checked, disabled }}
                             disabled={disabled}
                             onPress={() => toggleChecked(item)}
                             style={styles.checkItemLabel}>
                             <Image
                               contentFit="contain"
                               source={
-                                disabled
+                                muted
                                   ? require('@/assets/images/trade/check-disabled.svg')
                                   : checked
                                     ? require('@/assets/images/trade/check-selected.svg')
@@ -310,7 +332,7 @@ function CheckStepContent() {
                               style={[
                                 styles.checkItemText,
                                 checked && styles.checkItemTextChecked,
-                                disabled && styles.checkItemTextDisabled,
+                                muted && styles.checkItemTextDisabled,
                               ]}>
                               {copy.text}
                             </Text>
@@ -318,7 +340,7 @@ function CheckStepContent() {
                           <Pressable
                             accessibilityLabel={`${copy.text} 설명 ${expanded ? '접기' : '펼치기'}`}
                             accessibilityRole="button"
-                            disabled={disabled}
+                            disabled={muted}
                             hitSlop={8}
                             onPress={() => toggleExpanded(item)}
                             style={({ pressed }) => [
