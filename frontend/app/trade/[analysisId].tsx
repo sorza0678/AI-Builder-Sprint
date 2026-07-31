@@ -156,7 +156,7 @@ function QuestionCard({
             source={
               selected
                 ? require('@/assets/images/trade/question-action-active.svg')
-                : require('@/assets/images/trade/question-action.svg')
+                : require('@/assets/images/trade/check.svg')
             }
             style={styles.questionActionIcon}
           />
