@@ -23,10 +23,31 @@ import { Listing } from '@/src/types/marketplace';
 import { getUrlError, normalizeUrl } from '@/src/utils/url-validation';
 
 export default function AnalysisInputScreen() {
-  const params = useLocalSearchParams<{ url?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    url?: string | string[];
+    imageUri?: string | string[];
+    imageFileName?: string | string[];
+    imageMimeType?: string | string[];
+    imageWidth?: string | string[];
+    imageHeight?: string | string[];
+  }>();
+  const getFirstParam = (value?: string | string[]): string =>
+    Array.isArray(value) ? value[0] ?? '' : value ?? '';
   const initialUrl = normalizeUrl(Array.isArray(params.url) ? params.url[0] ?? '' : params.url ?? '');
+  const initialImageUri = getFirstParam(params.imageUri);
   const inputRef = useRef<TextInput>(null);
   const [url, setUrl] = useState(initialUrl);
+  const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(() =>
+    initialImageUri
+      ? {
+          uri: initialImageUri,
+          fileName: getFirstParam(params.imageFileName) || undefined,
+          mimeType: getFirstParam(params.imageMimeType) || undefined,
+          width: Number(getFirstParam(params.imageWidth)) || undefined,
+          height: Number(getFirstParam(params.imageHeight)) || undefined,
+        }
+      : null
+  );
   const [inputError, setInputError] = useState<string | null>(null);
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -86,6 +107,22 @@ export default function AnalysisInputScreen() {
     openConfirmation({ url: normalizedUrl, image: null });
   };
 
+  const confirmInput = (): void => {
+    const normalizedUrl = normalizeUrl(url);
+    const urlError = normalizedUrl ? getUrlError(normalizedUrl) : null;
+    setUrl(normalizedUrl);
+    setInputError(urlError);
+    if (urlError) {
+      return;
+    }
+
+    if (selectedImage) {
+      openConfirmation({ url: normalizedUrl, image: selectedImage });
+      return;
+    }
+    confirmUrl();
+  };
+
   const pickImage = async (): Promise<void> => {
     if (isPickingImage) {
       return;
@@ -121,7 +158,7 @@ export default function AnalysisInputScreen() {
         width: asset.width,
         height: asset.height,
       };
-      openConfirmation({ url: normalizeUrl(url), image: selectedImage });
+      setSelectedImage(selectedImage);
     } catch {
       setInputError('이미지를 선택하지 못했습니다.');
       Alert.alert('이미지 선택 실패', '이미지를 선택하지 못했습니다. 다시 시도해 주세요.');
@@ -152,7 +189,7 @@ export default function AnalysisInputScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.root}>
         <View style={styles.header}>
           <Pressable
@@ -170,11 +207,19 @@ export default function AnalysisInputScreen() {
           <View style={styles.headerSpacer} />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="링크 제출"
+            accessibilityLabel="입력 완료"
+            accessibilityState={{ disabled: !selectedImage && url.length === 0 }}
+            disabled={!selectedImage && url.length === 0}
             hitSlop={10}
-            onPress={confirmUrl}
+            onPress={confirmInput}
             style={({ pressed }) => [styles.headerActionBox, pressed && styles.pressed]}>
-            <Ionicons name="checkmark" size={24} color="#8656C2" />
+            <Text
+              style={[
+                styles.headerActionText,
+                !selectedImage && url.length === 0 && styles.headerActionTextDisabled,
+              ]}>
+              완료
+            </Text>
           </Pressable>
         </View>
 
@@ -184,20 +229,48 @@ export default function AnalysisInputScreen() {
             accessibilityLabel="분석할 상품 링크"
             autoCapitalize="none"
             autoCorrect={false}
-            autoFocus
+            autoFocus={!selectedImage}
             keyboardType="url"
             onChangeText={(value) => {
               setUrl(value);
               setInputError(null);
             }}
-            onSubmitEditing={confirmUrl}
+            onSubmitEditing={confirmInput}
             placeholder="분석할 상품의 링크를 입력하세요"
-            placeholderTextColor="#797979"
+            placeholderTextColor="#CDCDCD"
             returnKeyType="done"
             selectionColor="#8656C2"
             style={styles.input}
             value={url}
           />
+          {selectedImage && (
+            <View style={styles.previewFrame}>
+              <View style={styles.previewImageBox}>
+                <Image
+                  source={{ uri: selectedImage.uri }}
+                  style={styles.previewImage}
+                  contentFit="cover"
+                  transition={0}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="선택한 이미지 삭제"
+                  hitSlop={4}
+                  onPress={() => {
+                    setSelectedImage(null);
+                    requestAnimationFrame(() => inputRef.current?.focus());
+                  }}
+                  style={({ pressed }) => [
+                    styles.removeImageButton,
+                    pressed && styles.pressed,
+                  ]}>
+                  <View style={styles.removeImageCircle}>
+                    <Ionicons name="close" size={20} color="#FFFFFF" />
+                  </View>
+                </Pressable>
+              </View>
+            </View>
+          )}
           {inputError && (
             <Text accessibilityRole="alert" style={styles.error}>
               {inputError}
@@ -275,25 +348,75 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerActionBox: {
-    width: 24,
+    minWidth: 32,
     height: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerActionText: {
+    color: '#8656C2',
+    fontSize: 16,
+    fontWeight: '500',
+    lineHeight: 22,
+    letterSpacing: -0.3,
+  },
+  headerActionTextDisabled: {
+    color: '#D2D2E2',
+  },
   inputSection: {
     marginHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0FA',
+    alignItems: 'flex-start',
   },
   input: {
     height: 73,
     paddingVertical: 26,
     paddingHorizontal: 0,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0FA',
     color: '#424242',
     fontSize: 16,
     fontWeight: '400',
     lineHeight: 20,
     letterSpacing: -0.3,
+  },
+  previewFrame: {
+    width: 156,
+    height: 156,
+    marginBottom: 9,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#EDEDED',
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+  },
+  previewImageBox: {
+    width: 146,
+    height: 146,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  previewImage: {
+    width: 146,
+    height: 146,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  removeImageCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(33, 33, 33, 0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   error: {
     marginTop: 8,

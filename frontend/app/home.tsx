@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { Image } from 'expo-image';
@@ -7,14 +7,11 @@ import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { AnalysisConfirmSheet } from '@/src/components/analysis-confirm-sheet';
 import { HomeAnalysisInput } from '@/src/components/home-analysis-input';
 import { HomeHeader } from '@/src/components/home-header';
 import { HomeSidebar } from '@/src/components/home-sidebar';
 import { colors } from '@/src/constants/theme';
-import { createMockAnalysis } from '@/src/services/analysis-service';
 import { getRecentListings } from '@/src/services/listing-service';
-import { AnalysisDraft, SelectedImage } from '@/src/types/analysis-input';
 import { Listing } from '@/src/types/marketplace';
 import { extractFirstHttpUrl } from '@/src/utils/url-validation';
 
@@ -22,10 +19,7 @@ export default function HomeScreen() {
   const [inputError, setInputError] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
   const [isPickingImage, setIsPickingImage] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [recent, setRecent] = useState<Listing[]>([]);
-  const [pendingInput, setPendingInput] = useState<AnalysisDraft | null>(null);
-  const [sheetVisible, setSheetVisible] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
   const candidate = recent[0];
@@ -47,27 +41,6 @@ export default function HomeScreen() {
       active = false;
     };
   }, []);
-
-  const draftListing = useMemo(() => {
-    if (!candidate || !pendingInput) {
-      return undefined;
-    }
-    return {
-      ...candidate,
-      sourceUrl: pendingInput.url || candidate.sourceUrl,
-      imageUrl: pendingInput.image?.uri ?? candidate.imageUrl,
-    };
-  }, [candidate, pendingInput]);
-
-  const openConfirmation = (input: AnalysisDraft): void => {
-    if (!candidate) {
-      setInputError('분석 준비 정보를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
-      return;
-    }
-    setPendingInput(input);
-    setInputError(null);
-    setSheetVisible(true);
-  };
 
   const pasteUrl = async (): Promise<void> => {
     if (isPasting || isPickingImage) {
@@ -125,39 +98,21 @@ export default function HomeScreen() {
         throw new Error('Selected image is missing');
       }
 
-      const selectedImage: SelectedImage = {
-        uri: asset.uri,
-        fileName: asset.fileName ?? undefined,
-        mimeType: asset.mimeType ?? undefined,
-        width: asset.width,
-        height: asset.height,
-      };
-      openConfirmation({ url: '', image: selectedImage });
+      router.push({
+        pathname: '/analysis-input',
+        params: {
+          imageUri: asset.uri,
+          imageFileName: asset.fileName ?? '',
+          imageMimeType: asset.mimeType ?? '',
+          imageWidth: String(asset.width),
+          imageHeight: String(asset.height),
+        },
+      });
     } catch {
       setInputError('이미지를 선택하지 못했습니다.');
       Alert.alert('이미지 선택 실패', '이미지를 선택하지 못했습니다. 다시 시도해 주세요.');
     } finally {
       setIsPickingImage(false);
-    }
-  };
-
-  const submitAnalysis = async (listing: Listing): Promise<void> => {
-    if (!pendingInput || isSubmitting) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    setInputError(null);
-    try {
-      // TODO: 백엔드 분석 API 연결 시 pendingInput과 확인된 listing 정보를 전송하도록 교체
-      const result = await createMockAnalysis(listing);
-      setSheetVisible(false);
-      router.push(`/analysis/${result.id}`);
-    } catch {
-      setInputError('분석을 시작하지 못했습니다.');
-      Alert.alert('분석 요청 실패', '분석을 시작하지 못했습니다. 다시 시도해 주세요.');
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -227,15 +182,6 @@ export default function HomeScreen() {
         <View style={styles.productVisual} />
       </SafeAreaView>
 
-      {draftListing && (
-        <AnalysisConfirmSheet
-          visible={sheetVisible}
-          listing={draftListing}
-          isAnalyzing={isSubmitting}
-          onClose={() => setSheetVisible(false)}
-          onAnalyze={submitAnalysis}
-        />
-      )}
       <HomeSidebar
         visible={sidebarVisible}
         onClose={() => setSidebarVisible(false)}
