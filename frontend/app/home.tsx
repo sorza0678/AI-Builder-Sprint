@@ -155,7 +155,7 @@ export default function HomeScreen() {
   };
 
   const handleHeaderActionPress = (): void => {
-    // TODO: 우측 헤더 아이콘의 기능 명세가 확정되면 연결
+    router.push("/compare");
   };
 
   return (
