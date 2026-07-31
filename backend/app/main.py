@@ -23,8 +23,16 @@ from app import ai_report, db, market_price, mock_data, rule_engine, scraper
 from app.schemas import (
     AnalyzeRequest,
     AnalyzeSuccess,
+    BookmarkListSuccess,
+    BookmarkRemoveSuccess,
+    BookmarkRequest,
+    BookmarkSuccess,
     ChecklistRequest,
     ChecklistSuccess,
+    ComparisonAddRequest,
+    ComparisonAddSuccess,
+    ComparisonListSuccess,
+    ComparisonRemoveSuccess,
     CompareRequest,
     CompareSuccess,
     ErrorBody,
@@ -32,6 +40,11 @@ from app.schemas import (
     HistorySuccess,
     InquiryScriptRequest,
     InquiryScriptSuccess,
+    MyPageSuccess,
+    TransactionListSuccess,
+    TransactionRequest,
+    TransactionStatusEnum,
+    TransactionSuccess,
 )
 
 app = FastAPI(
@@ -196,6 +209,122 @@ def inquiry_script(req: InquiryScriptRequest):
     if not analysis:
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
     return success({"item_id": req.item_id, "script": mock_data.build_inquiry_script(analysis)})
+
+
+@app.post(
+    "/api/v1/transaction",
+    response_model=TransactionSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["transaction"],
+    summary="거래 상태 등록/변경 (화면5 구매 결정 저장)",
+)
+def set_transaction(req: TransactionRequest):
+    if not db.get_analysis_by_id(req.item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    updated_at = db.set_transaction_status(req.user_id, req.item_id, req.status)
+    return success({"item_id": req.item_id, "status": req.status, "updated_at": updated_at})
+
+
+@app.get(
+    "/api/v1/transaction",
+    response_model=TransactionListSuccess,
+    tags=["transaction"],
+    summary="거래 상태 목록 조회 (status 생략 시 전체)",
+)
+def list_transactions(
+    user_id: str = Query(examples=["demo-user-1"]),
+    status: TransactionStatusEnum | None = Query(None),
+):
+    items = db.get_transactions(user_id, status)
+    return success({"items": items, "total": len(items)})
+
+
+@app.post(
+    "/api/v1/comparison",
+    response_model=ComparisonAddSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["comparison"],
+    summary="비교 후보 추가",
+)
+def add_comparison(req: ComparisonAddRequest):
+    if not db.get_analysis_by_id(req.item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    added = db.add_comparison_item(req.user_id, req.item_id)
+    return success({"item_id": req.item_id, "added": added})
+
+
+@app.delete(
+    "/api/v1/comparison",
+    response_model=ComparisonRemoveSuccess,
+    tags=["comparison"],
+    summary="비교 후보 제거",
+)
+def remove_comparison(
+    user_id: str = Query(examples=["demo-user-1"]),
+    item_id: int = Query(examples=[1]),
+):
+    removed = db.remove_comparison_item(user_id, item_id)
+    return success({"item_id": item_id, "removed": removed})
+
+
+@app.get(
+    "/api/v1/comparison",
+    response_model=ComparisonListSuccess,
+    tags=["comparison"],
+    summary="비교 후보 목록 조회",
+)
+def list_comparison(user_id: str = Query(examples=["demo-user-1"])):
+    items = db.get_comparison_items(user_id)
+    return success({"items": items, "total": len(items)})
+
+
+@app.post(
+    "/api/v1/bookmark",
+    response_model=BookmarkSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["bookmark"],
+    summary="찜 추가",
+)
+def add_bookmark(req: BookmarkRequest):
+    if not db.get_analysis_by_id(req.item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    bookmarked = db.bookmark(req.user_id, req.item_id)
+    return success({"item_id": req.item_id, "bookmarked": bookmarked})
+
+
+@app.delete(
+    "/api/v1/bookmark",
+    response_model=BookmarkRemoveSuccess,
+    tags=["bookmark"],
+    summary="찜 제거",
+)
+def remove_bookmark(
+    user_id: str = Query(examples=["demo-user-1"]),
+    item_id: int = Query(examples=[1]),
+):
+    removed = db.unbookmark(user_id, item_id)
+    return success({"item_id": item_id, "removed": removed})
+
+
+@app.get(
+    "/api/v1/bookmark",
+    response_model=BookmarkListSuccess,
+    tags=["bookmark"],
+    summary="찜 목록 조회",
+)
+def list_bookmarks(user_id: str = Query(examples=["demo-user-1"])):
+    items = db.get_bookmarks(user_id)
+    return success({"items": items, "total": len(items)})
+
+
+@app.get(
+    "/api/v1/mypage",
+    response_model=MyPageSuccess,
+    tags=["mypage"],
+    summary="마이페이지 상단 요약",
+)
+def mypage(user_id: str = Query(examples=["demo-user-1"])):
+    return success(db.get_mypage_summary(user_id))
 
 
 @app.get("/health", tags=["meta"], summary="상태 확인")

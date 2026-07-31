@@ -14,6 +14,7 @@ SCHEMA = _APP_DIR / "schema.sql"
 def get_db():
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")  # sqlite3 기본값은 OFF — FK 제약이 선언만 되고 무시되는 걸 방지
     try:
         yield conn
     finally:
@@ -23,7 +24,7 @@ def get_db():
 def init_db():
     """테이블 생성."""
     with get_db() as conn:
-        conn.executescript(SCHEMA.read_text())
+        conn.executescript(SCHEMA.read_text(encoding="utf-8"))
         conn.commit()
 
 
@@ -164,3 +165,124 @@ def unbookmark(user_id: str, analysis_id: int) -> bool:
         )
         conn.commit()
     return cursor.rowcount > 0
+
+
+def get_bookmarks(user_id: str) -> list[dict]:
+    """찜 목록 → analyze data 형태 배열 (최신순)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT analysis_id FROM bookmarks WHERE user_id = ? ORDER BY id DESC",
+            (user_id,),
+        ).fetchall()
+    return get_multiple_analyses([row["analysis_id"] for row in rows])
+
+
+def set_transaction_status(user_id: str, analysis_id: int, status: str) -> str:
+    """거래 상태 upsert (매물당 1개, 이력 아님) → updated_at(ISO, 'Z' 접미사) 반환."""
+    ensure_user(user_id)
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO transaction_status (user_id, analysis_id, status)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, analysis_id)
+            DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, analysis_id, status),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT updated_at FROM transaction_status WHERE user_id = ? AND analysis_id = ?",
+            (user_id, analysis_id),
+        ).fetchone()
+    return row["updated_at"].replace(" ", "T") + "Z"
+
+
+def get_transactions(user_id: str, status: Optional[str] = None) -> list[dict]:
+    """거래 상태 목록 (analysis_history와 조인, 최신 변경순). status 생략 시 전체."""
+    query = """
+        SELECT t.analysis_id, t.status, t.updated_at,
+               a.title, a.price, a.trust_score, a.risk_level
+        FROM transaction_status t
+        JOIN analysis_history a ON a.id = t.analysis_id
+        WHERE t.user_id = ?
+    """
+    params: list = [user_id]
+    if status:
+        query += " AND t.status = ?"
+        params.append(status)
+    query += " ORDER BY t.updated_at DESC"
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "item_id": row["analysis_id"],
+            "title": row["title"],
+            "price": row["price"],
+            "trust_score": row["trust_score"],
+            "risk_level": row["risk_level"],
+            "status": row["status"],
+            "updated_at": row["updated_at"].replace(" ", "T") + "Z",
+        }
+        for row in rows
+    ]
+
+
+def add_comparison_item(user_id: str, analysis_id: int) -> bool:
+    """비교 후보 추가 → 성공 여부(이미 있으면 False)."""
+    ensure_user(user_id)
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO comparison_items(user_id, analysis_id) VALUES (?, ?)",
+                (user_id, analysis_id),
+            )
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def remove_comparison_item(user_id: str, analysis_id: int) -> bool:
+    """비교 후보 제거 → 성공 여부."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM comparison_items WHERE user_id = ? AND analysis_id = ?",
+            (user_id, analysis_id),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_comparison_items(user_id: str) -> list[dict]:
+    """비교 후보 목록 → analyze data 형태 배열 (최신순)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT analysis_id FROM comparison_items WHERE user_id = ? ORDER BY id DESC",
+            (user_id,),
+        ).fetchall()
+    return get_multiple_analyses([row["analysis_id"] for row in rows])
+
+
+def get_mypage_summary(user_id: str) -> dict:
+    """마이페이지 상단 요약 — 기존/신규 테이블 COUNT만으로 구성 (별도 집계 테이블 없음)."""
+    with get_db() as conn:
+        analysis_count = conn.execute(
+            "SELECT COUNT(*) c FROM analysis_history WHERE user_id = ?", (user_id,)
+        ).fetchone()["c"]
+        bookmark_count = conn.execute(
+            "SELECT COUNT(*) c FROM bookmarks WHERE user_id = ?", (user_id,)
+        ).fetchone()["c"]
+        comparison_count = conn.execute(
+            "SELECT COUNT(*) c FROM comparison_items WHERE user_id = ?", (user_id,)
+        ).fetchone()["c"]
+        transaction_completed_count = conn.execute(
+            "SELECT COUNT(*) c FROM transaction_status WHERE user_id = ? AND status = 'COMPLETED'",
+            (user_id,),
+        ).fetchone()["c"]
+    return {
+        "analysis_count": analysis_count,
+        "bookmark_count": bookmark_count,
+        "comparison_count": comparison_count,
+        "transaction_completed_count": transaction_completed_count,
+    }
