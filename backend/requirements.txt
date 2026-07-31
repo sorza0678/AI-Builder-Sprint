@@ -1,0 +1,11 @@
+# --- 공통 (A: 분석 API) ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+python-dotenv>=1.0
+pytest>=8.0
+# --- B: 서비스·DB (Supabase 전환용 스캐폴드) ---
+sqlalchemy
+psycopg2-binary
+pydantic-settings
+ruff
