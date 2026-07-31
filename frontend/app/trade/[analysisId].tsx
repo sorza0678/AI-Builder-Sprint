@@ -8,12 +8,12 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ErrorState, LoadingState } from '@/src/components/common';
+import { Text } from '@/src/components/pretendard-text';
 import {
   TRADE_CHECKLIST_ITEMS,
   TRADE_QUESTIONS,

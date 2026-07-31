@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, useWindowDimensions, View } from 'react-native';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,12 +10,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { HomeAnalysisInput } from '@/src/components/home-analysis-input';
 import { HomeHeader } from '@/src/components/home-header';
 import { HomeSidebar } from '@/src/components/home-sidebar';
+import { Text } from '@/src/components/pretendard-text';
 import { colors } from '@/src/constants/theme';
 import { getRecentListings } from '@/src/services/listing-service';
 import { Listing } from '@/src/types/marketplace';
 import { extractFirstHttpUrl } from '@/src/utils/url-validation';
 
 export default function HomeScreen() {
+  const { width, height } = useWindowDimensions();
   const [inputError, setInputError] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
   const [isPickingImage, setIsPickingImage] = useState(false);
@@ -23,6 +25,10 @@ export default function HomeScreen() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
 
   const candidate = recent[0];
+  const contentWidth = Math.min(width, 480);
+  const availableHeight = Math.max(height - 24, 640);
+  const scale = Math.min(contentWidth / 360, availableHeight / 736);
+  const designWidth = 360 * scale;
 
   useEffect(() => {
     let active = true;
@@ -139,37 +145,56 @@ export default function HomeScreen() {
       />
 
       <SafeAreaView style={styles.safeArea}>
-        <HomeHeader
-          onMenuPress={handleMenuPress}
-          onActionPress={handleHeaderActionPress}
-        />
+        <View style={[styles.content, { width: designWidth }]}>
+          <HomeHeader
+            scale={scale}
+            onMenuPress={handleMenuPress}
+            onActionPress={handleHeaderActionPress}
+          />
 
-        <View style={styles.hero}>
+          <View
+            style={[
+              styles.hero,
+              {
+                height: 238 * scale,
+                marginTop: 58 * scale,
+                paddingHorizontal: 16 * scale,
+                paddingVertical: 35 * scale,
+                gap: 40 * scale,
+              },
+            ]}>
           <View
             accessible
             accessibilityRole="header"
-            accessibilityLabel="링크를 입력해 상품을 분석해볼까요?"
+            accessibilityLabel="링크를 입력해 계산기를 분석해볼까요?"
             style={styles.titleGroup}>
             <MaskedView
-              style={styles.titleMask}
+              style={[styles.primaryTitleMask, { height: 41.6 * scale }]}
               maskElement={
-                <View style={styles.titleMaskContent}>
-                  <Text style={styles.titleText}>링크를 입력해</Text>
-                  <Text style={styles.titleText}>상품을 분석해볼까요?</Text>
-                </View>
+                <Text
+                  style={[
+                    styles.primaryTitleText,
+                    { fontSize: 32 * scale, lineHeight: 41.6 * scale },
+                  ]}>
+                  링크를 입력해
+                </Text>
               }>
               <LinearGradient
-                colors={[
-                  colors.homeTitleStart,
-                  colors.homeTitleEnd,
-                  colors.homeTitleAccent,
-                ]}
-                locations={[0, 0.45, 1]}
+                colors={[colors.homeTitleStart, colors.homeTitleEnd]}
+                locations={[0.13095, 0.83333]}
                 style={styles.titleGradient}
               />
             </MaskedView>
+            <Text
+              style={[
+                styles.secondaryTitleText,
+                { fontSize: 32 * scale, lineHeight: 41.6 * scale },
+              ]}>
+              계산기를 분석해볼까요?
+            </Text>
           </View>
           <HomeAnalysisInput
+            scale={scale}
             inputError={inputError}
             isPasting={isPasting}
             isPickingImage={isPickingImage}
@@ -177,9 +202,30 @@ export default function HomeScreen() {
             onPaste={pasteUrl}
             onPickImage={pickImage}
           />
-        </View>
+          </View>
 
-        <View style={styles.productVisual} />
+          <View
+            style={[
+              styles.productVisual,
+              {
+                width: designWidth,
+                minHeight: 352 * scale,
+                marginTop: 28 * scale,
+              },
+            ]}>
+            <Image
+              source={require('@/assets/images/home/calculator.png')}
+              style={{
+                position: 'absolute',
+                width: 471.209 * scale,
+                height: 706.814 * scale,
+                left: -53.6 * scale,
+                top: -133.23 * scale,
+              }}
+              contentFit="cover"
+            />
+          </View>
+        </View>
       </SafeAreaView>
 
       <HomeSidebar
@@ -197,39 +243,37 @@ const styles = StyleSheet.create({
   },
   texture: {
     ...StyleSheet.absoluteFillObject,
-    opacity: 0.18,
+    opacity: 0.83,
+    mixBlendMode: 'overlay',
   },
   safeArea: {
     flex: 1,
+    alignItems: 'center',
+  },
+  content: {
+    flex: 1,
   },
   hero: {
-    height: 238,
-    marginTop: 58,
-    paddingHorizontal: 16,
-    paddingVertical: 35,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 40,
   },
   titleGroup: {
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  titleMask: {
+  primaryTitleMask: {
     width: '100%',
-    height: 83.2,
   },
-  titleMaskContent: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  titleText: {
+  primaryTitleText: {
     color: '#000000',
-    fontSize: 32,
     fontWeight: '600',
-    lineHeight: 41.6,
+    letterSpacing: -0.3,
+    textAlign: 'center',
+  },
+  secondaryTitleText: {
+    color: colors.homeTitleAccent,
+    fontWeight: '700',
     letterSpacing: -0.3,
     textAlign: 'center',
   },
@@ -238,8 +282,6 @@ const styles = StyleSheet.create({
   },
   productVisual: {
     flex: 1,
-    minHeight: 260,
-    marginTop: 28,
     overflow: 'hidden',
     position: 'relative',
   },

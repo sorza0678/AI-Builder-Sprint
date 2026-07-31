@@ -5,7 +5,6 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from 'react-native';
@@ -15,6 +14,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AnalysisConfirmSheet } from '@/src/components/analysis-confirm-sheet';
+import { Text } from '@/src/components/pretendard-text';
 import { colors } from '@/src/constants/theme';
 import { createMockAnalysis } from '@/src/services/analysis-service';
 import { getRecentListings } from '@/src/services/listing-service';
@@ -376,6 +376,7 @@ const styles = StyleSheet.create({
     color: '#424242',
     fontSize: 16,
     fontWeight: '400',
+    fontFamily: 'Pretendard-Regular',
     lineHeight: 20,
     letterSpacing: -0.3,
   },

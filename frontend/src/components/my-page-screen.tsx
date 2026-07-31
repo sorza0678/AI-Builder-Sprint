@@ -1,7 +1,8 @@
 import { router } from 'expo-router';
 import { Image, ImageSource } from 'expo-image';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/src/components/pretendard-text';
 
 import {
   MY_PAGE_HISTORY,

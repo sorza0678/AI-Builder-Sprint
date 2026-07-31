@@ -1,8 +1,9 @@
 import { ReactNode } from 'react';
 import {
-  ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text,
+  ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet,
   TextInput, TextInputProps, View, ViewStyle,
 } from 'react-native';
+import { Text } from '@/src/components/pretendard-text';
 import { colors, radius, spacing } from '@/src/constants/theme';
 import { Listing } from '@/src/types/marketplace';
 
@@ -89,7 +90,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: colors.text },
   disabled: { backgroundColor: colors.disabled, opacity: 0.7 },
   pressed: { opacity: 0.75 },
-  input: { minHeight: 48, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, color: colors.text, paddingHorizontal: spacing.md },
+  input: { minHeight: 48, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, color: colors.text, fontFamily: 'Pretendard-Regular', paddingHorizontal: spacing.md },
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginTop: spacing.sm },
   card: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, gap: spacing.xs, padding: spacing.md },
   cardTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },

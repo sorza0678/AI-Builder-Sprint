@@ -6,12 +6,12 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/src/components/pretendard-text';
 import { markOnboardingCompleted } from '@/src/utils/onboarding-storage';
 
 const stepOneScreen = require('@/assets/images/onboarding/step-1-screen.png');

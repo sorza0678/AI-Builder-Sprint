@@ -1,7 +1,8 @@
 import { Href, router } from 'expo-router';
 import { Image, ImageSource } from 'expo-image';
-import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Modal, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/src/components/pretendard-text';
 
 interface HomeSidebarProps {
   visible: boolean;
