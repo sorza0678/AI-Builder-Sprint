@@ -44,8 +44,8 @@ npm run ios
 ## 현재 사용자 흐름
 
 ```text
-온보딩
-  → 로그인
+온보딩 (앱 첫 실행시)
+  → 로그인 (필요한 경우에만)
   → 홈
   → 링크 입력 또는 이미지 선택
   → 분석 전 정보 확인
@@ -93,17 +93,17 @@ npm run ios
 
 ## 화면 구현 상태
 
-| 화면 | 경로 | 상태 |
-| --- | --- | --- |
-| 온보딩 | `/onboarding` | 기본 구조 및 Mock 흐름 |
-| 로그인 | `/login` | Mock 소셜 로그인 |
-| 홈 | `/home` | Figma 디자인 적용 |
-| 분석 입력 | `/analysis-input` | Figma 디자인 및 입력 기능 적용 |
-| 분석 전 정보 확인 | `AnalysisConfirmSheet` | Figma 디자인 및 수정 기능 적용 |
-| 분석 결과 | `/analysis/[analysisId]` | Figma 디자인 적용 |
-| 비교 | `/compare` | 기본 기능 UI |
-| 거래 준비 | `/trade/[analysisId]` | 기본 기능 UI |
-| 마이페이지 | `/mypage` | 기본 기능 UI |
+| 화면              | 경로                     | 상태                           |
+| ----------------- | ------------------------ | ------------------------------ |
+| 온보딩            | `/onboarding`            | 기본 구조 및 Mock 흐름         |
+| 로그인            | `/login`                 | Mock 소셜 로그인               |
+| 홈                | `/home`                  | Figma 디자인 적용              |
+| 분석 입력         | `/analysis-input`        | Figma 디자인 및 입력 기능 적용 |
+| 분석 전 정보 확인 | `AnalysisConfirmSheet`   | Figma 디자인 및 수정 기능 적용 |
+| 분석 결과         | `/analysis/[analysisId]` | Figma 디자인 적용              |
+| 비교              | `/compare`               | 기본 기능 UI                   |
+| 거래 준비         | `/trade/[analysisId]`    | 기본 기능 UI                   |
+| 마이페이지        | `/mypage`                | 기본 기능 UI                   |
 
 Expo 초기 템플릿의 `(tabs)` 및 `modal` 라우트 파일도 남아 있지만 현재 메인 사용자 흐름에는 연결되어 있지 않습니다.
 
@@ -214,8 +214,6 @@ npx expo export --platform android
 
 ## 다음 작업
 
-- 온보딩 Figma 디자인 적용
-- 로그인 Figma 디자인 적용
 - 비교 화면 Figma 디자인 적용
 - 거래 준비 화면 Figma 디자인 적용
 - 마이페이지 Figma 디자인 적용
