@@ -49,7 +49,7 @@ export function HomeAnalysisInput({
           ) : (
             <Image
               source={require('@/assets/images/home/image-picker.svg')}
-              style={{ width: 16.667 * scale, height: 16.667 * scale }}
+              style={{ width: 16.667, height: 16.667 }}
               contentFit="fill"
             />
           )}
@@ -77,13 +77,13 @@ export function HomeAnalysisInput({
           ) : (
             <Image
               source={require('@/assets/images/home/clipboard-paste.svg')}
-              style={{ width: 15.833 * scale, height: 18.333 * scale }}
+              style={{ width: 15.833, height: 18.333 }}
               contentFit="fill"
             />
           )}
           <Text style={[styles.pasteText, {
-            fontSize: 14 * scale,
-            lineHeight: 14 * scale,
+            fontSize: 14,
+            lineHeight: 14,
           }]}>붙여넣기</Text>
         </Pressable>
       </View>
