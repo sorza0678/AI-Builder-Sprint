@@ -8,7 +8,9 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text as NativeText,
   View,
+  ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -238,9 +240,7 @@ function CheckStepContent() {
             거래하기 전, 상품 상태를{'\n'}
             <Text style={styles.introAccent}>체크리스트</Text>로 확인해보세요!
           </Text>
-          <Text numberOfLines={1} style={styles.productCaption}>
-            BBS RS 18인치 중고 휠 4개 세트 의 거래준비
-          </Text>
+          <ProductCaption />
         </View>
 
         <View style={styles.methodRow}>
@@ -382,23 +382,65 @@ function PriceCard({
   label,
   price,
   image,
+  imageFrameStyle,
   imageStyle,
   watermark,
 }: {
   label: string;
   price: string;
   image: number;
+  imageFrameStyle: ViewStyle;
   imageStyle: ImageStyle;
   watermark: string;
 }) {
   return (
     <View style={styles.priceCard}>
       <View style={styles.priceCardCopy}>
-        <Text style={styles.priceCardLabel}>{label}</Text>
-        <Text style={styles.priceCardValue}>{price}</Text>
+        <Text numberOfLines={1} style={styles.priceCardLabel}>
+          {label}
+        </Text>
+        <Text numberOfLines={1} style={styles.priceCardValue}>
+          {price}
+        </Text>
       </View>
-      <Text style={styles.priceWatermark}>{watermark}</Text>
-      <Image contentFit="contain" source={image} style={[styles.priceCardImage, imageStyle]} />
+      <NativeText numberOfLines={1} style={styles.priceWatermark}>
+        {watermark}
+      </NativeText>
+      <View style={[styles.priceCardImageFrame, imageFrameStyle]}>
+        <Image contentFit="cover" source={image} style={[styles.priceCardImage, imageStyle]} />
+      </View>
+    </View>
+  );
+}
+
+function ProductCaption() {
+  return (
+    <View style={styles.productCaption}>
+      <Text numberOfLines={1} style={styles.productName}>
+        BBS RS 18인치 중고 휠 4개 세트
+      </Text>
+      <Text style={styles.productCaptionSuffix}> 의 거래준비</Text>
+    </View>
+  );
+}
+
+function PriceComparisonBubble() {
+  const [multiline, setMultiline] = useState(false);
+
+  return (
+    <View style={[styles.priceBubbleWrap, multiline && styles.priceBubbleWrapMultiline]}>
+      <View style={styles.priceBubbleTail} />
+      <View style={[styles.priceBubble, multiline && styles.priceBubbleMultiline]}>
+        <Text
+          onTextLayout={({ nativeEvent }) => {
+            setMultiline(nativeEvent.lines.length > 1);
+          }}
+          style={[styles.priceBubbleText, multiline && styles.priceBubbleTextMultiline]}>
+          <Text style={styles.priceBubbleMuted}>판매가보다 </Text>
+          {PRICE_PROPOSAL.difference}
+          <Text style={styles.priceBubbleMuted}> 낮아요!</Text>
+        </Text>
+      </View>
     </View>
   );
 }
@@ -412,15 +454,14 @@ function PriceStepContent({ onCopyMessage }: { onCopyMessage: () => void }) {
             판매자에게 연락하기 전,{'\n'}
             <Text style={styles.introAccent}>가격과 메시지</Text>를 준비해보세요!
           </Text>
-          <Text numberOfLines={1} style={styles.productCaption}>
-            BBS RS 18인치 중고 휠 4개 세트 의 거래준비
-          </Text>
+          <ProductCaption />
         </View>
 
         <View style={styles.priceSummary}>
           <View style={styles.priceCardsRow}>
             <PriceCard
               image={require('@/assets/images/trade/target-price-money.png')}
+              imageFrameStyle={styles.targetPriceImageFrame}
               imageStyle={styles.targetPriceImage}
               label="제안해볼 가격"
               price={PRICE_PROPOSAL.targetPrice}
@@ -428,6 +469,7 @@ function PriceStepContent({ onCopyMessage }: { onCopyMessage: () => void }) {
             />
             <PriceCard
               image={require('@/assets/images/trade/listed-price-money.png')}
+              imageFrameStyle={styles.listedPriceImageFrame}
               imageStyle={styles.listedPriceImage}
               label="현재 판매가"
               price={PRICE_PROPOSAL.listedPrice}
@@ -435,16 +477,7 @@ function PriceStepContent({ onCopyMessage }: { onCopyMessage: () => void }) {
             />
           </View>
 
-          <View style={styles.priceBubbleWrap}>
-            <View style={styles.priceBubbleTail} />
-            <View style={styles.priceBubble}>
-              <Text style={styles.priceBubbleText}>
-                <Text style={styles.priceBubbleMuted}>판매가보다 </Text>
-                {PRICE_PROPOSAL.difference}
-                <Text style={styles.priceBubbleMuted}> 낮아요!</Text>
-              </Text>
-            </View>
-          </View>
+          <PriceComparisonBubble />
         </View>
 
         <View style={styles.priceReasonSection}>
@@ -512,9 +545,7 @@ function ProgressStepContent({ analysisId }: { analysisId: string }) {
             지금 거래가 어느 단계인지,{'\n'}
             <Text style={styles.introAccent}>진행 상태</Text>를 남겨보세요!
           </Text>
-          <Text numberOfLines={1} style={styles.productCaption}>
-            BBS RS 18인치 중고 휠 4개 세트 의 거래준비
-          </Text>
+          <ProductCaption />
         </View>
 
         <View style={styles.tradeStepper}>
@@ -635,6 +666,7 @@ export default function TradePreparationScreen() {
   ]);
   const [visibleReasonIds, setVisibleReasonIds] = useState<string[]>([]);
   const [activeStep, setActiveStep] = useState<TradeStep>('inquiry');
+  const [favorite, setFavorite] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -743,15 +775,16 @@ export default function TradePreparationScreen() {
         </Pressable>
         <Text style={styles.headerTitle}>거래준비</Text>
         <Pressable
-          accessibilityLabel={activeStep === 'check' ? '관심 상품' : '거래 준비 메뉴'}
+          accessibilityLabel={favorite ? '찜 취소' : '찜하기'}
           accessibilityRole="button"
+          accessibilityState={{ selected: favorite }}
           hitSlop={8}
-          onPress={() => undefined}
+          onPress={() => setFavorite((current) => !current)}
           style={({ pressed }) => [styles.headerButton, styles.headerButtonRight, pressed && styles.pressed]}>
           <Image
             contentFit="contain"
-          source={
-              activeStep !== 'inquiry'
+            source={
+              favorite
                 ? require('@/assets/images/trade/header-heart.svg')
                 : require('@/assets/images/trade/header-action.svg')
             }
@@ -803,10 +836,7 @@ export default function TradePreparationScreen() {
             판매자에게 연락하기 전,{'\n'}꼭{' '}
             <Text style={styles.introAccent}>물어볼 내용</Text>을 확인해보세요!
           </Text>
-          <Text numberOfLines={1} style={styles.productCaption}>
-            <Text style={styles.productName}>BBS RS 18인치 중고 휠 4개 세트</Text>
-            {' 의 거래준비'}
-          </Text>
+          <ProductCaption />
         </View>
 
         <View style={styles.questionsArea}>
@@ -963,15 +993,31 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     letterSpacing: -0.3,
   },
-  introAccent: { color: '#8656C2' },
+  introAccent: {
+    color: '#8656C2',
+    fontWeight: '600',
+  },
   productCaption: {
     paddingRight: 90,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  productName: {
+    flexShrink: 1,
+    minWidth: 0,
     color: '#838C97',
     fontSize: 15,
     lineHeight: 20.25,
     letterSpacing: -0.3,
   },
-  productName: { color: '#838C97' },
+  productCaptionSuffix: {
+    flexShrink: 0,
+    color: '#838C97',
+    fontSize: 15,
+    lineHeight: 20.25,
+    letterSpacing: -0.3,
+  },
   questionsArea: {
     marginTop: 40,
     paddingBottom: 20,
@@ -1238,9 +1284,11 @@ const styles = StyleSheet.create({
     gap: 29,
   },
   priceCardsRow: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    gap: 32,
   },
   priceCard: {
     width: 140,
@@ -1252,10 +1300,10 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: '#EFF3FF',
     alignItems: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   priceCardCopy: {
-    width: '100%',
+    width: 120,
     alignItems: 'center',
     gap: 4,
     zIndex: 2,
@@ -1267,6 +1315,7 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     letterSpacing: -0.3,
     textAlign: 'center',
+    flexShrink: 0,
   },
   priceCardValue: {
     color: '#8656C2',
@@ -1275,36 +1324,58 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     letterSpacing: -0.3,
     textAlign: 'center',
+    flexShrink: 0,
   },
   priceWatermark: {
     marginTop: 12,
+    width: 140,
     color: '#E5E3F9',
-    fontSize: 31,
-    fontWeight: '700',
-    lineHeight: 32,
-    letterSpacing: -0.3,
+    fontFamily: 'Fredoka_700Bold',
+    fontSize: 31.816,
+    lineHeight: 31.816,
+    letterSpacing: -0.4773,
     textAlign: 'center',
+    flexShrink: 0,
+  },
+  priceCardImageFrame: {
+    position: 'absolute',
+    zIndex: 3,
+    overflow: 'hidden',
   },
   priceCardImage: {
     position: 'absolute',
-    zIndex: 3,
   },
-  targetPriceImage: {
-    left: 18,
-    top: 96,
-    width: 98,
-    height: 90,
+  targetPriceImageFrame: {
+    left: 19.9,
+    top: 100.26,
+    width: 94.9,
+    height: 85.73,
     transform: [{ rotate: '2.26deg' }],
   },
+  targetPriceImage: {
+    left: -15.98,
+    top: -20.57,
+    width: 126.88,
+    height: 126.88,
+  },
+  listedPriceImageFrame: {
+    left: 12.35,
+    top: 93.35,
+    width: 108,
+    height: 108,
+  },
   listedPriceImage: {
-    left: 12,
-    top: 93,
+    left: 0,
+    top: 0,
     width: 108,
     height: 108,
   },
   priceBubbleWrap: {
-    width: 195,
+    width: 224,
     minHeight: 49,
+  },
+  priceBubbleWrapMultiline: {
+    width: '100%',
   },
   priceBubbleTail: {
     marginLeft: 49,
@@ -1329,6 +1400,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  priceBubbleMultiline: {
+    alignItems: 'flex-start',
+  },
   priceBubbleText: {
     color: '#111727',
     fontSize: 14,
@@ -1336,6 +1410,10 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     letterSpacing: -0.3,
     textAlign: 'center',
+  },
+  priceBubbleTextMultiline: {
+    lineHeight: 18.2,
+    textAlign: 'left',
   },
   priceBubbleMuted: {
     color: '#484B4D',
