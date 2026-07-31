@@ -151,6 +151,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="거래준비"
                   icon={require('@/assets/images/sidebar/clipboard-check.svg')}
                   iconSize={{ width: 19.333, height: 23.667 }}
+                  href="/trade/mock-analysis-1"
                   onNavigate={navigate}
                 />
                 <MenuRow
