@@ -109,8 +109,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="바톤 사용법 보기"
-                // TODO: 사용법 화면 또는 외부 문서 경로가 확정되면 연결
-                onPress={() => undefined}
+                onPress={() => navigate('/onboarding')}
                 style={({ pressed }) => [styles.guideCard, pressed && styles.pressed]}>
                 <Image
                   source={require('@/assets/images/sidebar/guide-brand.png')}
