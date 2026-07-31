@@ -20,10 +20,14 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 export default function HomeScreen() {
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [inputError, setInputError] = useState<string | null>(null);
   const [isPasting, setIsPasting] = useState(false);
   const [isPickingImage, setIsPickingImage] = useState(false);
@@ -32,16 +36,16 @@ export default function HomeScreen() {
 
   const candidate = recent[0];
   const contentWidth = Math.min(width, 480);
-  const scale = Math.min(contentWidth / 360, height / 760);
+  const usableHeight = height - insets.top;
+  const scale = Math.min(contentWidth / 360, usableHeight / 736);
   const designWidth = 360 * scale;
   const headerHeight = 60 * scale;
   const headerGap = 58 * scale;
   const heroHeight = 238 * scale;
   const visualTopGap = 28 * scale;
-  const visualHeight = Math.max(
-    height - headerHeight - headerGap - heroHeight - visualTopGap,
-    352 * scale,
-  );
+  const visualTop = insets.top + headerHeight + headerGap + heroHeight + visualTopGap;
+  const visualLeft = (width - designWidth) / 2;
+  const visualHeight = Math.max(height - visualTop, 352 * scale);
 
   useEffect(() => {
     let active = true;
@@ -172,7 +176,7 @@ export default function HomeScreen() {
         pointerEvents="none"
       />
 
-      <SafeAreaView edges={[]} style={styles.safeArea}>
+      <SafeAreaView edges={["top"]} style={styles.safeArea}>
         <View style={[styles.content, { width: designWidth }]}>
           <HomeHeader
             scale={scale}
@@ -237,31 +241,33 @@ export default function HomeScreen() {
               onPickImage={pickImage}
             />
           </View>
-
-          <View
-            style={[
-              styles.productVisual,
-              {
-                width: designWidth,
-                height: visualHeight,
-                marginTop: 28 * scale,
-              },
-            ]}
-          >
-            <Image
-              source={require("@/assets/images/home/calculator.png")}
-              style={{
-                position: "absolute",
-                width: 471.209 * scale,
-                height: 706.814 * scale,
-                left: -53.6 * scale,
-                top: -88 * scale,
-              }}
-              contentFit="cover"
-            />
-          </View>
         </View>
       </SafeAreaView>
+
+      <View
+        pointerEvents="none"
+        style={[
+          styles.productVisual,
+          {
+            width: designWidth,
+            height: visualHeight,
+            left: visualLeft,
+            top: visualTop,
+          },
+        ]}
+      >
+        <Image
+          source={require("@/assets/images/home/calculator.png")}
+          style={{
+            position: "absolute",
+            width: 471.209 * scale,
+            height: 706.814 * scale,
+            left: -53.6 * scale,
+            top: -88 * scale,
+          }}
+          contentFit="cover"
+        />
+      </View>
 
       <HomeSidebar
         visible={sidebarVisible}
@@ -316,8 +322,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   productVisual: {
-    flex: 1,
     overflow: "hidden",
-    position: "relative",
+    position: "absolute",
   },
 });
