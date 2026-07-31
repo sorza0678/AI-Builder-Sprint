@@ -16,7 +16,6 @@ interface MenuRowProps {
     height: number;
   };
   href?: Href;
-  showNewBadge?: boolean;
   onNavigate: (href: Href) => void;
 }
 
@@ -25,7 +24,6 @@ function MenuRow({
   icon,
   iconSize,
   href,
-  showNewBadge = false,
   onNavigate,
 }: MenuRowProps) {
   return (
@@ -40,13 +38,6 @@ function MenuRow({
         <Image source={icon} style={iconSize} contentFit="fill" />
       </View>
       <Text style={styles.menuLabel}>{label}</Text>
-      {showNewBadge && (
-        <Image
-          source={require('@/assets/images/sidebar/new-badge.svg')}
-          style={styles.newBadge}
-          contentFit="fill"
-        />
-      )}
     </Pressable>
   );
 }
@@ -147,7 +138,6 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="비교기록"
                   icon={require('@/assets/images/sidebar/comparison-history.svg')}
                   iconSize={{ width: 22.715, height: 22.125 }}
-                  href="/compare"
                   onNavigate={navigate}
                 />
                 <MenuRow
@@ -155,7 +145,6 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   icon={require('@/assets/images/sidebar/compare.svg')}
                   iconSize={{ width: 23.667, height: 21.5 }}
                   href="/compare"
-                  showNewBadge
                   onNavigate={navigate}
                 />
                 <MenuRow
@@ -348,11 +337,6 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     lineHeight: 16,
     letterSpacing: -0.3,
-  },
-  newBadge: {
-    width: 12,
-    height: 12,
-    marginLeft: -4,
   },
   scrim: {
     flex: 1,
