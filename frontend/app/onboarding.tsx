@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { markOnboardingCompleted } from '@/src/utils/onboarding-storage';
 
 const stepOneScreen = require('@/assets/images/onboarding/step-1-screen.png');
 const stepTwoScreen = require('@/assets/images/onboarding/step-2-screen.png');
@@ -39,11 +40,20 @@ export default function OnboardingScreen() {
     });
   };
 
+  const completeOnboarding = async (): Promise<void> => {
+    try {
+      await markOnboardingCompleted();
+    } catch {
+      // 저장 실패가 온보딩 종료와 홈 진입을 막지 않도록 합니다.
+    }
+    router.replace('/home');
+  };
+
   const handleNext = (): void => {
     if (step < 4) {
       moveToStep(onboardingSteps[step]);
     } else {
-      router.replace('/login');
+      void completeOnboarding();
     }
   };
 
@@ -160,7 +170,9 @@ export default function OnboardingScreen() {
           accessibilityRole="button"
           accessibilityLabel="온보딩 닫기"
           hitSlop={10}
-          onPress={() => router.replace('/login')}
+          onPress={() => {
+            void completeOnboarding();
+          }}
           style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}>
           <Image source={closeIcon} style={styles.closeIcon} contentFit="fill" />
         </Pressable>
