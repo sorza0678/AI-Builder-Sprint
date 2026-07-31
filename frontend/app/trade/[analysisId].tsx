@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
@@ -30,6 +29,8 @@ const STEPS = ['문의', '확인', '가격', '진행'] as const;
 type TradeStep = 'inquiry' | 'check' | 'price' | 'progress';
 type TradeProgressStep = 'beforeContact' | 'contacting' | 'scheduled' | 'completed';
 type TradeDecision = 'considering' | 'hold' | 'excluded';
+type NullableTradeProgressStep = TradeProgressStep | null;
+type NullableTradeDecision = TradeDecision | null;
 
 const PRICE_PROPOSAL = {
   targetPrice: '약 550,000',
@@ -534,30 +535,12 @@ function PriceStepContent({ onCopyMessage }: { onCopyMessage: () => void }) {
   );
 }
 
-function ProgressStepContent({ analysisId }: { analysisId: string }) {
-  const [progressStep, setProgressStep] = useState<TradeProgressStep>('beforeContact');
-  const [decision, setDecision] = useState<TradeDecision>('excluded');
-  const [saving, setSaving] = useState(false);
-  const activeIndex = PROGRESS_STEPS.findIndex((step) => step.value === progressStep);
-
-  const saveProgress = async (): Promise<void> => {
-    setSaving(true);
-    try {
-      await AsyncStorage.setItem(
-        `trade-progress:${analysisId}`,
-        JSON.stringify({
-          progressStep,
-          decision,
-          savedAt: new Date().toISOString(),
-        }),
-      );
-    } catch {
-      // 로컬 저장 실패가 홈 이동을 막지 않도록 합니다.
-    } finally {
-      setSaving(false);
-      router.replace('/home');
-    }
-  };
+function ProgressStepContent() {
+  const [progressStep, setProgressStep] = useState<NullableTradeProgressStep>(null);
+  const [decision, setDecision] = useState<NullableTradeDecision>(null);
+  const activeIndex = progressStep
+    ? PROGRESS_STEPS.findIndex((step) => step.value === progressStep)
+    : -1;
 
   return (
     <View style={styles.progressPage}>
@@ -658,20 +641,6 @@ function ProgressStepContent({ analysisId }: { analysisId: string }) {
           })}
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: saving }}
-          disabled={saving}
-          onPress={saveProgress}
-          style={({ pressed }) => [
-            styles.tradeProgressSaveButton,
-            pressed && styles.pressed,
-            saving && styles.tradeProgressSaveButtonDisabled,
-          ]}>
-          <Text style={styles.tradeProgressSaveText}>
-            {saving ? '저장 중...' : '진행 상태 저장하기'}
-          </Text>
-        </Pressable>
       </View>
     </View>
   );
@@ -918,7 +887,7 @@ export default function TradePreparationScreen() {
         ) : activeStep === 'price' ? (
           <PriceStepContent onCopyMessage={copyPriceMessage} />
         ) : (
-          <ProgressStepContent analysisId={id} />
+          <ProgressStepContent />
         )}
       </ScrollView>
     </SafeAreaView>
@@ -1607,25 +1576,6 @@ const styles = StyleSheet.create({
   tradeDecisionTextSelected: {
     color: '#8656C2',
     fontWeight: '500',
-  },
-  tradeProgressSaveButton: {
-    marginTop: 10,
-    minHeight: 54,
-    borderRadius: 14,
-    backgroundColor: '#8656C2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tradeProgressSaveButtonDisabled: {
-    opacity: 0.55,
-  },
-  tradeProgressSaveText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    lineHeight: 22,
-    letterSpacing: -0.3,
-    textAlign: 'center',
   },
   pressed: { opacity: 0.65 },
 });
