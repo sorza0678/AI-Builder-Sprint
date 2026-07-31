@@ -1,7 +1,9 @@
 import { router } from 'expo-router';
 import { Image, ImageSource } from 'expo-image';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/src/components/pretendard-text';
 
 import {
   MY_PAGE_HISTORY,
@@ -41,22 +43,46 @@ const ACCOUNT_ITEMS: MenuItem[] = [
 
 function ListingPreview({
   item,
-  highlighted = false,
+  initiallySelected = false,
 }: {
   item: MyPageListing;
-  highlighted?: boolean;
+  initiallySelected?: boolean;
 }) {
+  const [selected, setSelected] = useState(initiallySelected);
+  const [favorite, setFavorite] = useState(false);
+
   return (
-    <View style={[styles.listingCard, highlighted && styles.listingCardHighlighted]}>
+    <Pressable
+      accessibilityLabel={`${item.title} 카드 선택`}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={() => setSelected((current) => !current)}
+      style={({ pressed }) => [
+        styles.listingCard,
+        selected && styles.listingCardHighlighted,
+        pressed && styles.pressed,
+      ]}>
       <View style={styles.listingTop}>
         <Text style={styles.listingLocation}>{item.location}</Text>
         <Pressable
-          accessibilityLabel={`${item.title} 카드 닫기`}
+          accessibilityLabel={`${item.title} ${favorite ? '찜 취소' : '찜하기'}`}
           accessibilityRole="button"
+          accessibilityState={{ selected: favorite }}
           hitSlop={8}
-          onPress={() => undefined}
-          style={({ pressed }) => [styles.cardClose, pressed && styles.pressed]}>
-          <Text style={styles.cardCloseText}>×</Text>
+          onPress={(event) => {
+            event.stopPropagation();
+            setFavorite((current) => !current);
+          }}
+          style={({ pressed }) => [styles.cardFavorite, pressed && styles.pressed]}>
+          <Image
+            contentFit="contain"
+            source={
+              favorite
+                ? require('@/assets/images/mypage/listing-heart-filled.svg')
+                : require('@/assets/images/mypage/listing-heart.svg')
+            }
+            style={styles.cardFavoriteIcon}
+          />
         </Pressable>
       </View>
       <Text style={styles.listingPrice}>{item.price}</Text>
@@ -71,18 +97,18 @@ function ListingPreview({
           </View>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
 function ListingSection({
   title,
   items,
-  highlighted = false,
+  initiallySelectedFirst = false,
 }: {
   title: string;
   items: MyPageListing[];
-  highlighted?: boolean;
+  initiallySelectedFirst?: boolean;
 }) {
   return (
     <View style={styles.listingSection}>
@@ -91,8 +117,12 @@ function ListingSection({
         contentContainerStyle={styles.listingRow}
         horizontal
         showsHorizontalScrollIndicator={false}>
-        {items.map((item) => (
-          <ListingPreview highlighted={highlighted} item={item} key={item.id} />
+        {items.map((item, index) => (
+          <ListingPreview
+            initiallySelected={initiallySelectedFirst && index === 0}
+            item={item}
+            key={item.id}
+          />
         ))}
       </ScrollView>
     </View>
@@ -114,11 +144,13 @@ function MenuSection({ title, items }: { title: string; items: MenuItem[] }) {
             <Image contentFit="contain" source={item.icon} style={styles.menuIcon} />
           </View>
           <Text style={styles.menuLabel}>{item.label}</Text>
-          <Image
-            contentFit="contain"
-            source={require('@/assets/images/mypage/chevron.svg')}
-            style={styles.menuChevron}
-          />
+          <View style={styles.menuChevronBox}>
+            <Image
+              contentFit="contain"
+              source={require('@/assets/images/mypage/chevron.svg')}
+              style={styles.menuChevron}
+            />
+          </View>
         </Pressable>
       ))}
     </View>
@@ -183,8 +215,8 @@ export function MyPageScreen() {
         </View>
 
         <View style={styles.listingsArea}>
-          <ListingSection items={MY_PAGE_RECOMMENDATIONS} title="추천 매물" />
-          <ListingSection highlighted items={MY_PAGE_HISTORY} title="최근 본 매물" />
+          <ListingSection items={MY_PAGE_RECOMMENDATIONS} title="추천" />
+          <ListingSection initiallySelectedFirst items={MY_PAGE_HISTORY} title="기록" />
         </View>
 
         <View style={styles.separator} />
@@ -317,19 +349,17 @@ const styles = StyleSheet.create({
     lineHeight: 14.3,
     letterSpacing: -0.3,
   },
-  cardClose: {
-    width: 24,
-    height: 24,
-    marginTop: -7,
-    marginRight: -5,
+  cardFavorite: {
+    width: 40,
+    height: 40,
+    marginTop: -10,
+    marginRight: -10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardCloseText: {
-    color: '#838C97',
-    fontSize: 20,
-    fontWeight: '300',
-    lineHeight: 22,
+  cardFavoriteIcon: {
+    width: 19.355,
+    height: 19.355,
   },
   listingPrice: {
     color: '#484B4D',
@@ -405,7 +435,18 @@ const styles = StyleSheet.create({
     lineHeight: 19.5,
     letterSpacing: -0.3,
   },
-  menuChevron: { width: 18, height: 18, marginRight: 4 },
+  menuChevronBox: {
+    width: 18,
+    height: 18,
+    marginRight: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuChevron: {
+    width: 12,
+    height: 6.75,
+    transform: [{ rotate: '-90deg' }],
+  },
   withdrawButton: {
     alignSelf: 'center',
     marginTop: 40,

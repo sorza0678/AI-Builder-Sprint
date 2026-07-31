@@ -1,8 +1,10 @@
 import { Image } from 'expo-image';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Text } from '@/src/components/pretendard-text';
 import { colors } from '@/src/constants/theme';
 
 interface HomeAnalysisInputProps {
+  scale?: number;
   inputError: string | null;
   isPasting: boolean;
   isPickingImage: boolean;
@@ -12,6 +14,7 @@ interface HomeAnalysisInputProps {
 }
 
 export function HomeAnalysisInput({
+  scale = 1,
   inputError,
   isPasting,
   isPickingImage,
@@ -22,8 +25,8 @@ export function HomeAnalysisInput({
   const disabled = externallyDisabled || isPasting || isPickingImage;
 
   return (
-    <View style={styles.container}>
-      <View style={styles.actions}>
+    <View style={[styles.container, { gap: 8 * scale }]}>
+      <View style={[styles.actions, { gap: 16 * scale }]}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="매물 이미지 선택"
@@ -32,6 +35,12 @@ export function HomeAnalysisInput({
           onPress={onPickImage}
           style={({ pressed }) => [
             styles.imageButton,
+            {
+              width: 42 * scale,
+              height: 42 * scale,
+              padding: 11 * scale,
+              borderRadius: 40 * scale,
+            },
             disabled && styles.disabled,
             pressed && styles.pressed,
           ]}>
@@ -40,7 +49,7 @@ export function HomeAnalysisInput({
           ) : (
             <Image
               source={require('@/assets/images/home/image-picker.svg')}
-              style={styles.imageIcon}
+              style={{ width: 16.667, height: 16.667 }}
               contentFit="fill"
             />
           )}
@@ -54,6 +63,12 @@ export function HomeAnalysisInput({
           onPress={onPaste}
           style={({ pressed }) => [
             styles.pasteButton,
+            {
+              height: 42 * scale,
+              padding: 11 * scale,
+              borderRadius: 40 * scale,
+              gap: 8 * scale,
+            },
             disabled && styles.disabled,
             pressed && styles.pressed,
           ]}>
@@ -62,14 +77,23 @@ export function HomeAnalysisInput({
           ) : (
             <Image
               source={require('@/assets/images/home/clipboard-paste.svg')}
-              style={styles.pasteIcon}
+              style={{ width: 15.833, height: 18.333 }}
               contentFit="fill"
             />
           )}
-          <Text style={styles.pasteText}>붙여넣기</Text>
+          <Text style={[styles.pasteText, {
+            fontSize: 14,
+            lineHeight: 14,
+          }]}>붙여넣기</Text>
         </Pressable>
       </View>
-      {inputError && <Text accessibilityRole="alert" style={styles.error}>{inputError}</Text>}
+      {inputError && (
+        <Text
+          accessibilityRole="alert"
+          style={[styles.error, { fontSize: 12 * scale, lineHeight: 16 * scale }]}>
+          {inputError}
+        </Text>
+      )}
     </View>
   );
 }
@@ -77,51 +101,29 @@ export function HomeAnalysisInput({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    gap: 8,
   },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
   },
   imageButton: {
-    width: 42,
-    height: 42,
-    padding: 11,
-    borderRadius: 40,
     backgroundColor: colors.homeAction,
     alignItems: 'center',
     justifyContent: 'center',
   },
   pasteButton: {
-    height: 42,
-    padding: 11,
-    borderRadius: 40,
     backgroundColor: colors.homeAction,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-  },
-  imageIcon: {
-    width: 16.667,
-    height: 16.667,
-  },
-  pasteIcon: {
-    width: 15.833,
-    height: 18.333,
   },
   pasteText: {
     color: colors.homeText,
-    fontSize: 14,
     fontWeight: '500',
-    lineHeight: 14,
     letterSpacing: -0.3,
   },
   error: {
     maxWidth: 300,
     color: colors.danger,
-    fontSize: 12,
-    lineHeight: 16,
     textAlign: 'center',
   },
   disabled: {

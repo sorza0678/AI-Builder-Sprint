@@ -8,13 +8,13 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/src/components/pretendard-text';
 
 import { Listing } from '@/src/types/marketplace';
 
@@ -521,6 +521,7 @@ const styles = StyleSheet.create({
     color: '#212121',
     fontSize: 16,
     fontWeight: '400',
+    fontFamily: 'Pretendard-Regular',
     lineHeight: 20,
     letterSpacing: -0.3,
     backgroundColor: '#FFFFFF',
