@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { router } from 'expo-router';
 import { Image } from 'expo-image';
 import {
@@ -17,6 +17,12 @@ import {
   PRIORITY_CONTENT,
   ComparisonPriority,
 } from '@/src/mocks/comparison';
+import {
+  addToComparisonCart,
+  getComparisonCart,
+  removeFromComparisonCart,
+} from '@/src/repositories/comparison-cart-repository';
+import { saveComparisonHistory } from '@/src/repositories/comparison-history-repository';
 
 const PRIORITIES: ComparisonPriority[] = ['price', 'safety', 'condition', 'components'];
 
@@ -33,12 +39,59 @@ export default function CompareScreen() {
   );
   const hiddenItem = COMPARISON_ITEMS.find((item) => !visibleIds.includes(item.id));
 
-  const removeItem = (id: string): void => {
+  useEffect(() => {
+    let mounted = true;
+
+    getComparisonCart().then((cart) => {
+      if (!mounted || cart.serverItemIds.length === 0) {
+        return;
+      }
+
+      const cartVisibleIds = COMPARISON_ITEMS
+        .filter((item) => cart.serverItemIds.includes(item.serverItemId))
+        .map((item) => item.id);
+
+      if (cartVisibleIds.length > 0) {
+        setVisibleIds(cartVisibleIds);
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (visibleItems.length < 2) {
+      return;
+    }
+
+    saveComparisonHistory({
+      serverItemIds: visibleItems.map((item) => item.serverItemId),
+      itemSnapshots: visibleItems.map((item) => ({
+        serverItemId: item.serverItemId,
+        title: item.name,
+        price: Number(item.price.replace(/\D/g, '')) || 0,
+        trustScore: item.totalScore,
+      })),
+      recommendation: content.title,
+    });
+  }, [content.title, visibleItems]);
+
+  const removeItem = async (id: string): Promise<void> => {
+    const item = COMPARISON_ITEMS.find((candidate) => candidate.id === id);
+    if (item) {
+      await removeFromComparisonCart(item.serverItemId);
+    }
     setVisibleIds((current) => current.filter((itemId) => itemId !== id));
   };
 
-  const addItem = (): void => {
+  const addItem = async (): Promise<void> => {
     if (hiddenItem) {
+      const result = await addToComparisonCart(hiddenItem.serverItemId);
+      if (!result.ok) {
+        return;
+      }
       setVisibleIds((current) => [...current, hiddenItem.id].slice(0, 3));
     }
   };

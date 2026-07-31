@@ -20,6 +20,7 @@ interface ComparisonValue {
 
 export interface ComparisonItem {
   id: string;
+  serverItemId: number;
   name: string;
   price: string;
   totalScore: number;
@@ -84,6 +85,7 @@ export const PRIORITY_CONTENT: Record<ComparisonPriority, PriorityContent> = {
 export const COMPARISON_ITEMS: ComparisonItem[] = [
   {
     id: 'enkei-rpf1',
+    serverItemId: 1,
     name: 'Enkei RPF1 17인치',
     price: '420,000원',
     totalScore: 81,
@@ -102,6 +104,7 @@ export const COMPARISON_ITEMS: ComparisonItem[] = [
   },
   {
     id: 'bbs-rs',
+    serverItemId: 2,
     name: 'BBS RS 18인치',
     price: '600,000원',
     totalScore: 74,
@@ -120,6 +123,7 @@ export const COMPARISON_ITEMS: ComparisonItem[] = [
   },
   {
     id: 'work-emotion',
+    serverItemId: 3,
     name: 'WORK Emotion 17인치',
     price: '510,000원',
     totalScore: 77,
