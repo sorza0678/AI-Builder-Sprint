@@ -41,26 +41,17 @@ const ACCOUNT_ITEMS: MenuItem[] = [
   },
 ];
 
-function ListingPreview({
-  item,
-  initiallySelected = false,
-}: {
-  item: MyPageListing;
-  initiallySelected?: boolean;
-}) {
-  const [selected, setSelected] = useState(initiallySelected);
+function ListingPreview({ item }: { item: MyPageListing }) {
   const [favorite, setFavorite] = useState(false);
 
   return (
     <Pressable
       accessibilityLabel={`${item.title} 카드 선택`}
       accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={() => setSelected((current) => !current)}
+      onPress={() => router.push('/analysis/mock-analysis-1')}
       style={({ pressed }) => [
         styles.listingCard,
-        selected && styles.listingCardHighlighted,
-        pressed && styles.pressed,
+        pressed && styles.listingCardHighlighted,
       ]}>
       <View style={styles.listingTop}>
         <Text style={styles.listingLocation}>{item.location}</Text>
@@ -104,11 +95,9 @@ function ListingPreview({
 function ListingSection({
   title,
   items,
-  initiallySelectedFirst = false,
 }: {
   title: string;
   items: MyPageListing[];
-  initiallySelectedFirst?: boolean;
 }) {
   return (
     <View style={styles.listingSection}>
@@ -117,12 +106,8 @@ function ListingSection({
         contentContainerStyle={styles.listingRow}
         horizontal
         showsHorizontalScrollIndicator={false}>
-        {items.map((item, index) => (
-          <ListingPreview
-            initiallySelected={initiallySelectedFirst && index === 0}
-            item={item}
-            key={item.id}
-          />
+        {items.map((item) => (
+          <ListingPreview item={item} key={item.id} />
         ))}
       </ScrollView>
     </View>
@@ -216,7 +201,7 @@ export function MyPageScreen() {
 
         <View style={styles.listingsArea}>
           <ListingSection items={MY_PAGE_RECOMMENDATIONS} title="추천" />
-          <ListingSection initiallySelectedFirst items={MY_PAGE_HISTORY} title="기록" />
+          <ListingSection items={MY_PAGE_HISTORY} title="기록" />
         </View>
 
         <View style={styles.separator} />
