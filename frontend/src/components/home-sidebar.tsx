@@ -72,21 +72,18 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
           <View style={styles.content}>
             <View style={styles.profile}>
               <Text style={styles.greeting}>반가워요!</Text>
-              <View style={styles.profileRow}>
-                <Text style={styles.username}>qweasd101</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="마이페이지로 이동"
-                  onPress={() => navigate('/mypage')}
-                  style={({ pressed }) => [styles.mypageLink, pressed && styles.pressed]}>
-                  <Text style={styles.mypageText}>마이페이지로</Text>
-                  <Image
-                    source={require('@/assets/images/sidebar/mypage-chevron.svg')}
-                    style={styles.mypageChevron}
-                    contentFit="fill"
-                  />
-                </Pressable>
-              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="로그인 화면으로 이동"
+                onPress={() => navigate('/login')}
+                style={({ pressed }) => [styles.loginLink, pressed && styles.pressed]}>
+                <Text style={styles.loginText}>로그인 해주세요</Text>
+                <Image
+                  source={require('@/assets/images/sidebar/login-chevron.png')}
+                  style={styles.loginChevron}
+                  contentFit="fill"
+                />
+              </Pressable>
             </View>
 
             <View style={styles.navigation}>
@@ -115,18 +112,11 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                 // TODO: 사용법 화면 또는 외부 문서 경로가 확정되면 연결
                 onPress={() => undefined}
                 style={({ pressed }) => [styles.guideCard, pressed && styles.pressed]}>
-                <View style={styles.guideBrand}>
-                  <Image
-                    source={require('@/assets/images/sidebar/guide-logo.svg')}
-                    style={styles.guideLogo}
-                    contentFit="fill"
-                  />
-                  <Image
-                    source={require('@/assets/images/sidebar/guide-mark.svg')}
-                    style={styles.guideMark}
-                    contentFit="fill"
-                  />
-                </View>
+                <Image
+                  source={require('@/assets/images/sidebar/guide-brand.png')}
+                  style={styles.guideBrand}
+                  contentFit="fill"
+                />
                 <View style={styles.guideLink}>
                   <Text style={styles.guideText}>바톤이 처음이신가요? </Text>
                   <Text style={styles.guideStrong}>사용법 보기</Text>
@@ -222,36 +212,22 @@ const styles = StyleSheet.create({
     lineHeight: 19.5,
     letterSpacing: -0.3,
   },
-  profileRow: {
-    minHeight: 26,
+  loginLink: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    alignSelf: 'flex-start',
+    gap: 10,
   },
-  username: {
+  loginText: {
     color: '#212121',
     fontSize: 20,
     fontWeight: '500',
     lineHeight: 26,
     letterSpacing: -0.3,
-    textDecorationLine: 'underline',
   },
-  mypageLink: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  mypageText: {
-    color: '#797979',
-    fontSize: 15,
-    fontWeight: '400',
-    lineHeight: 15,
-    letterSpacing: -0.3,
-  },
-  mypageChevron: {
-    width: 9.367,
-    height: 5.283,
+  loginChevron: {
+    width: 14,
+    height: 14,
   },
   navigation: {
     gap: 24,
@@ -289,18 +265,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   guideBrand: {
+    width: 82.337,
     height: 18,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 6.214,
-  },
-  guideLogo: {
-    width: 61.686,
-    height: 18,
-  },
-  guideMark: {
-    width: 14.433,
-    height: 10.661,
   },
   guideLink: {
     flexDirection: 'row',
