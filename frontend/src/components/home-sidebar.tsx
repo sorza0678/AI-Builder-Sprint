@@ -84,6 +84,21 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   contentFit="fill"
                 />
               </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="마이페이지 미리보기"
+                onPress={() => navigate('/mypage-preview')}
+                style={({ pressed }) => [
+                  styles.temporaryMyPageButton,
+                  pressed && styles.pressed,
+                ]}>
+                <Text style={styles.temporaryMyPageText}>마이페이지 미리보기</Text>
+                <Image
+                  source={require('@/assets/images/sidebar/mypage-chevron.svg')}
+                  style={styles.temporaryMyPageChevron}
+                  contentFit="contain"
+                />
+              </Pressable>
             </View>
 
             <View style={styles.navigation}>
@@ -227,6 +242,28 @@ const styles = StyleSheet.create({
   loginChevron: {
     width: 14,
     height: 14,
+  },
+  temporaryMyPageButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: '#F0F0FA',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  temporaryMyPageText: {
+    color: '#6850A4',
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 16.9,
+    letterSpacing: -0.3,
+  },
+  temporaryMyPageChevron: {
+    width: 12,
+    height: 12,
   },
   navigation: {
     gap: 24,
