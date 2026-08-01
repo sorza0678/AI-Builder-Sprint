@@ -141,9 +141,33 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 - `comparison_items(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) — bookmarks와 동일 구조 (B, 2026-07-31)
 - `listing_details(id, user_id, analysis_id, title, price, model_name, year, size_or_capacity, color, usage_period, components_json, defects_json, created_at, updated_at)` — UNIQUE(user_id, analysis_id), `transaction_status`와 동일한 upsert 패턴 (B, 2026-08-02)
 
-로컬 파일 `backend/resale_guard.db` (gitignore). 스키마는 Supabase(PostgreSQL) 호환으로 작성됨 —
-전환 시 `raw_analysis_json TEXT` → `JSONB`, `AUTOINCREMENT` → `BIGSERIAL`만 바꾸면 된다 (`DATABASE_URL`은 `.env`).
+로컬 파일 `backend/resale_guard.db` (gitignore).
 FK 제약은 `PRAGMA foreign_keys=ON`으로 실제 적용됨 (2026-07-31 수정 — 이전엔 선언만 되고 sqlite3 기본값 때문에 무시되고 있었음).
+
+### SQLite ↔ Postgres(Supabase) 이중 백엔드 (2026-08-02)
+
+`backend/app/db.py`가 `DATABASE_URL` 환경변수 유무로 자동 분기한다 — 없으면 지금처럼 SQLite(로컬 개발·
+테스트, **무변경**), 있으면 Postgres(psycopg2). 배포(Render 등)는 이번 스코프에 포함 안 함 — DB 계층만.
+
+- 스키마 파일 2개: `backend/app/schema.sql`(SQLite, 기존) / `backend/app/schema_postgres.sql`(신규,
+  차이는 `AUTOINCREMENT` → `BIGSERIAL`뿐). `raw_analysis_json`/`components_json`/`defects_json`은
+  Postgres에서도 **JSONB가 아니라 TEXT 유지** — 기존 `json.dumps`/`json.loads` 수동 관리와 psycopg2의
+  JSONB 자동 adapt가 충돌하지 않게 하려는 의도적 선택 (이전에 이 문서에 "JSONB로 바꾸면 된다"고 적혀
+  있던 건 이제 틀린 내용 — TEXT 유지로 확정).
+  헬퍼 3개(`_is_postgres()`, `_execute()`, `_iso_z()`)만 추가해 `?`→`%s` 변환·타임스탬프
+  문자열/datetime 차이를 흡수 — SQLite 3.35+/Postgres 공통으로 `RETURNING`과
+  `ON CONFLICT ... DO NOTHING`/`DO UPDATE`를 쓰므로 `.lastrowid`·`INSERT OR IGNORE` 같은 진짜
+  SQLite 전용 구문만 걷어냈다.
+- 테스트는 `client` fixture가 `monkeypatch.delenv("DATABASE_URL", raising=False)`로 항상 SQLite를
+  쓰도록 강제 — 로컬 `.env`에 실제 Supabase `DATABASE_URL`을 넣어놔도 `pytest`는 안 새어나감. 54개
+  전부 무변경으로 통과 확인.
+- ⚠️ **아직 실제 Supabase로 검증 안 됨**: `init_db()`가 `schema_postgres.sql` 전체를 파라미터 없는
+  `cur.execute()` 한 번으로 실행하는데(psycopg2/libpq의 simple query protocol이 세미콜론 구분 다중
+  문장을 지원한다는 전제), 실제 네트워크 인스턴스로 스모크 테스트 전까지는 리스크로 남아있음. 실패하면
+  세미콜론 split 후 순차 실행으로 바꾸면 됨(구현 난이도 낮음).
+- ⚠️ **연결 풀링**: 코드 레벨 풀링은 이번에 안 넣음(해커톤 트래픽엔 불필요) — 대신 실제 `DATABASE_URL`을
+  넣을 때 Supabase의 direct connection(5432)이 아니라 **PgBouncer 풀러 URL(6543, `?pgbouncer=true`)**을
+  쓰는 걸 권장. `.env.example` 참고.
 
 ### 미확정 / 논의 필요
 

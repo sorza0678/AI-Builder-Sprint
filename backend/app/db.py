@@ -1,40 +1,77 @@
-"""SQLite 연결 + CRUD. (Supabase 전환 전까지 로컬 개발/데모용)"""
+"""SQLite/Postgres(Supabase) 이중 백엔드 연결 + CRUD.
+
+DATABASE_URL 환경변수가 있으면 Postgres(psycopg2), 없으면 SQLite(로컬 개발/테스트) 사용.
+"""
+import os
 import sqlite3
 import json
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
+import psycopg2
+import psycopg2.extras
+
 _APP_DIR = Path(__file__).resolve().parent
 DATABASE = _APP_DIR.parent / "resale_guard.db"
 SCHEMA = _APP_DIR / "schema.sql"
+SCHEMA_POSTGRES = _APP_DIR / "schema_postgres.sql"
+
+
+def _is_postgres() -> bool:
+    """매 호출마다 fresh하게 읽음 — 테스트가 이 값을 캐시에 의존하지 않게 하기 위함."""
+    return bool(os.environ.get("DATABASE_URL"))
+
+
+def _execute(conn, sql: str, params=()):
+    """conn.execute(...) 슈거 대체 — sqlite3/psycopg2 공통, ? → %s 자동 변환."""
+    cur = conn.cursor()
+    cur.execute(sql.replace("?", "%s") if _is_postgres() else sql, params)
+    return cur
+
+
+def _iso_z(value) -> str:
+    """DB에서 읽은 타임스탬프를 ISO+'Z' 문자열로. sqlite3는 str, psycopg2는 datetime을 반환."""
+    if isinstance(value, str):
+        return value.replace(" ", "T") + "Z"
+    return value.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")  # sqlite3 기본값은 OFF — FK 제약이 선언만 되고 무시되는 걸 방지
-    try:
-        yield conn
-    finally:
-        conn.close()
+    if _is_postgres():
+        conn = psycopg2.connect(
+            os.environ["DATABASE_URL"],
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")  # sqlite3 기본값은 OFF — FK 제약이 선언만 되고 무시되는 걸 방지
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 
 def init_db():
     """테이블 생성."""
     with get_db() as conn:
-        conn.executescript(SCHEMA.read_text(encoding="utf-8"))
+        if _is_postgres():
+            conn.cursor().execute(SCHEMA_POSTGRES.read_text(encoding="utf-8"))
+        else:
+            conn.executescript(SCHEMA.read_text(encoding="utf-8"))
         conn.commit()
 
 
 def ensure_user(user_id: str):
     """user_id가 없으면 생성."""
     with get_db() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO users(id) VALUES (?)",
-            (user_id,),
-        )
+        _execute(conn, "INSERT INTO users(id) VALUES (?) ON CONFLICT (id) DO NOTHING", (user_id,))
         conn.commit()
 
 
@@ -50,11 +87,13 @@ def save_analysis(
     """
     ensure_user(user_id)
     with get_db() as conn:
-        cursor = conn.execute(
+        cursor = _execute(
+            conn,
             """
             INSERT INTO analysis_history
             (user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
             """,
             (
                 user_id,
@@ -66,9 +105,10 @@ def save_analysis(
                 "{}",  # placeholder, 아래에서 item_id 확정 후 채움
             ),
         )
-        analysis_id = cursor.lastrowid
+        analysis_id = cursor.fetchone()["id"]
         analysis_data = {**analysis_data, "item_id": analysis_id}
-        conn.execute(
+        _execute(
+            conn,
             "UPDATE analysis_history SET raw_analysis_json = ? WHERE id = ?",
             (json.dumps(analysis_data), analysis_id),
         )
@@ -79,7 +119,8 @@ def save_analysis(
 def get_analysis_by_id(analysis_id: int) -> Optional[dict]:
     """분석 결과 조회 (raw_analysis_json에서 full data 파싱)."""
     with get_db() as conn:
-        row = conn.execute(
+        row = _execute(
+            conn,
             "SELECT raw_analysis_json FROM analysis_history WHERE id = ?",
             (analysis_id,),
         ).fetchone()
@@ -101,22 +142,25 @@ def get_multiple_analyses(analysis_ids: list[int]) -> list[dict]:
 def bookmark(user_id: str, analysis_id: int) -> bool:
     """북마크 추가 → 성공 여부."""
     ensure_user(user_id)
-    try:
-        with get_db() as conn:
-            conn.execute(
+    with get_db() as conn:
+        try:
+            _execute(
+                conn,
                 "INSERT INTO bookmarks(user_id, analysis_id) VALUES (?, ?)",
                 (user_id, analysis_id),
             )
             conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False  # 이미 북마크됨 또는 invalid analysis_id
+            return True
+        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+            conn.rollback()
+            return False  # 이미 북마크됨 또는 invalid analysis_id
 
 
 def unbookmark(user_id: str, analysis_id: int) -> bool:
     """북마크 제거 → 성공 여부."""
     with get_db() as conn:
-        cursor = conn.execute(
+        cursor = _execute(
+            conn,
             "DELETE FROM bookmarks WHERE user_id = ? AND analysis_id = ?",
             (user_id, analysis_id),
         )
@@ -127,7 +171,8 @@ def unbookmark(user_id: str, analysis_id: int) -> bool:
 def get_bookmarks(user_id: str) -> list[dict]:
     """찜 목록 → analyze data 형태 배열 (최신순)."""
     with get_db() as conn:
-        rows = conn.execute(
+        rows = _execute(
+            conn,
             "SELECT analysis_id FROM bookmarks WHERE user_id = ? ORDER BY id DESC",
             (user_id,),
         ).fetchall()
@@ -140,13 +185,15 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
     → (items_list, total_count)
     """
     with get_db() as conn:
-        total = conn.execute(
+        total = _execute(
+            conn,
             "SELECT COUNT(*) as cnt FROM analysis_history WHERE user_id = ?",
             (user_id,),
         ).fetchone()["cnt"]
 
         offset = (page - 1) * size
-        rows = conn.execute(
+        rows = _execute(
+            conn,
             """
             SELECT id, source_url, title, price, trust_score, risk_level,
                    raw_analysis_json, created_at
@@ -167,9 +214,9 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
                 "price": row["price"],
                 "trust_score": row["trust_score"],
                 "risk_level": row["risk_level"],
-                # SQLite CURRENT_TIMESTAMP 는 UTC — 'Z'를 붙여 aware datetime 으로
-                # 내보내야 프론트(JS Date)가 로컬시간으로 올바르게 변환한다
-                "created_at": row["created_at"].replace(" ", "T") + "Z",
+                # 항상 UTC — 'Z'를 붙여 aware datetime 으로 내보내야
+                # 프론트(JS Date)가 로컬시간으로 올바르게 변환한다
+                "created_at": _iso_z(row["created_at"]),
             }
             for row in rows
         ],
@@ -184,7 +231,8 @@ def upsert_transaction_status(
     → updated_at(ISO, 'Z' 접미사) 반환."""
     ensure_user(user_id)
     with get_db() as conn:
-        conn.execute(
+        _execute(
+            conn,
             """
             INSERT INTO transaction_status (user_id, analysis_id, stage, decision)
             VALUES (?, ?, ?, ?)
@@ -194,11 +242,12 @@ def upsert_transaction_status(
             (user_id, analysis_id, stage, decision),
         )
         conn.commit()
-        row = conn.execute(
+        row = _execute(
+            conn,
             "SELECT updated_at FROM transaction_status WHERE user_id = ? AND analysis_id = ?",
             (user_id, analysis_id),
         ).fetchone()
-    return row["updated_at"].replace(" ", "T") + "Z"
+    return _iso_z(row["updated_at"])
 
 
 def get_transactions(
@@ -221,7 +270,7 @@ def get_transactions(
         params.append(decision)
     query += " ORDER BY t.updated_at DESC"
     with get_db() as conn:
-        rows = conn.execute(query, params).fetchall()
+        rows = _execute(conn, query, params).fetchall()
     return [
         {
             "item_id": row["analysis_id"],
@@ -231,7 +280,7 @@ def get_transactions(
             "risk_level": row["risk_level"],
             "stage": row["stage"],
             "decision": row["decision"],
-            "updated_at": row["updated_at"].replace(" ", "T") + "Z",
+            "updated_at": _iso_z(row["updated_at"]),
         }
         for row in rows
     ]
@@ -240,22 +289,25 @@ def get_transactions(
 def add_comparison_item(user_id: str, analysis_id: int) -> bool:
     """비교 후보 추가 → 성공 여부(이미 있으면 False)."""
     ensure_user(user_id)
-    try:
-        with get_db() as conn:
-            conn.execute(
+    with get_db() as conn:
+        try:
+            _execute(
+                conn,
                 "INSERT INTO comparison_items(user_id, analysis_id) VALUES (?, ?)",
                 (user_id, analysis_id),
             )
             conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
+            return True
+        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+            conn.rollback()
+            return False
 
 
 def remove_comparison_item(user_id: str, analysis_id: int) -> bool:
     """비교 후보 제거 → 성공 여부."""
     with get_db() as conn:
-        cursor = conn.execute(
+        cursor = _execute(
+            conn,
             "DELETE FROM comparison_items WHERE user_id = ? AND analysis_id = ?",
             (user_id, analysis_id),
         )
@@ -266,7 +318,8 @@ def remove_comparison_item(user_id: str, analysis_id: int) -> bool:
 def get_comparison_items(user_id: str) -> list[dict]:
     """비교 후보 목록 → analyze data 형태 배열 (최신순)."""
     with get_db() as conn:
-        rows = conn.execute(
+        rows = _execute(
+            conn,
             "SELECT analysis_id FROM comparison_items WHERE user_id = ? ORDER BY id DESC",
             (user_id,),
         ).fetchall()
@@ -289,7 +342,8 @@ def upsert_listing_details(
     """화면2 확인/수정된 매물 상세 upsert (매물당 1개, 이력 아님) → updated_at(ISO, 'Z' 접미사) 반환."""
     ensure_user(user_id)
     with get_db() as conn:
-        conn.execute(
+        _execute(
+            conn,
             """
             INSERT INTO listing_details
                 (user_id, analysis_id, title, price, model_name, year,
@@ -322,26 +376,28 @@ def upsert_listing_details(
             ),
         )
         conn.commit()
-        row = conn.execute(
+        row = _execute(
+            conn,
             "SELECT updated_at FROM listing_details WHERE user_id = ? AND analysis_id = ?",
             (user_id, analysis_id),
         ).fetchone()
-    return row["updated_at"].replace(" ", "T") + "Z"
+    return _iso_z(row["updated_at"])
 
 
 def get_mypage_summary(user_id: str, recent_limit: int = 5) -> dict:
     """마이페이지 상단 요약 — 기존/신규 테이블 COUNT + 최근 분석 목록(기존 get_history 재사용)."""
     with get_db() as conn:
-        analysis_count = conn.execute(
-            "SELECT COUNT(*) c FROM analysis_history WHERE user_id = ?", (user_id,)
+        analysis_count = _execute(
+            conn, "SELECT COUNT(*) c FROM analysis_history WHERE user_id = ?", (user_id,)
         ).fetchone()["c"]
-        bookmark_count = conn.execute(
-            "SELECT COUNT(*) c FROM bookmarks WHERE user_id = ?", (user_id,)
+        bookmark_count = _execute(
+            conn, "SELECT COUNT(*) c FROM bookmarks WHERE user_id = ?", (user_id,)
         ).fetchone()["c"]
-        comparison_count = conn.execute(
-            "SELECT COUNT(*) c FROM comparison_items WHERE user_id = ?", (user_id,)
+        comparison_count = _execute(
+            conn, "SELECT COUNT(*) c FROM comparison_items WHERE user_id = ?", (user_id,)
         ).fetchone()["c"]
-        transaction_completed_count = conn.execute(
+        transaction_completed_count = _execute(
+            conn,
             "SELECT COUNT(*) c FROM transaction_status WHERE user_id = ? AND stage = 'COMPLETED'",
             (user_id,),
         ).fetchone()["c"]

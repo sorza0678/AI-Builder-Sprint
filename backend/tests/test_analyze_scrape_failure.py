@@ -10,6 +10,7 @@ from app.scraper import FALLBACK_LISTING
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(db, "DATABASE", tmp_path / "test_resale_guard.db")
     with TestClient(app) as c:
         yield c

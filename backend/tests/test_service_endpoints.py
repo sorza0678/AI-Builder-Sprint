@@ -14,6 +14,8 @@ from app.main import app
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    # 로컬 .env에 실제 DATABASE_URL(Supabase)이 있어도 테스트는 항상 SQLite를 쓰도록 강제
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(db, "DATABASE", tmp_path / "test_resale_guard.db")
     with TestClient(app) as c:
         yield c
