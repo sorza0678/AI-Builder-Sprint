@@ -5,14 +5,28 @@
 **현재 상태**: 실제 분석 파이프라인 동작. `/analyze` 흐름:
 
 ```
-scraper (매물 수집, 실패 시 fallback 고정데이터)
+scraper (매물 수집 — JSON-LD 우선, 실패 시 400 SCRAPE_FAILED)
   → market_price (번개장터 검색 → 잡음 필터 → trimmed mean, 실패 시 FALLBACK_PRICES)
   → rule_engine (trust_score·risk_level — 결정론적, LLM 아님)
   → ai_report (Upstage Solar LLM 로 하자/경고 텍스트 보강 — 키 없으면 자동 스킵, 점수 불변)
   → DB 저장
 ```
 
-모든 외부 호출에 fallback이 있어 **어떤 URL을 넣어도 데모는 죽지 않는다.**
+시세·Rule Engine·AI 보강 단계는 fallback이 있어 절대 예외를 던지지 않는다.
+매물 수집(scraper) 자체가 실패하면(예: 지원하지 않는 사이트, 네트워크 오류) 가짜 데이터로 조용히
+넘어가지 않고 **400 `SCRAPE_FAILED`를 정직하게 반환한다** (2026-08-01 변경 — 이전엔 fallback 고정
+데이터로 200을 반환했음). 데모 트리거 단어(`danger`·`warning`·`mock-safe`·`fail`)는 스크래퍼 실행 전에
+분기하므로 이 로직과 무관하게 항상 그대로 동작한다.
+
+### 매물 수집 (scraper) 플랫폼별 동작
+
+- **번개장터**: 공개 상품 API(`api.bunjang.co.kr`)를 우선 사용, 실패 시 og태그로 재시도
+- **당근마켓 · 중고나라(`web.joongna.com`)**: JSON-LD(`schema.org/Product`)를 og태그보다 우선 사용
+  — 실측 확인 결과 og태그보다 가격·이미지 정확도가 높음 (예: og:description에 판매자가 적은
+  텍스트가 있어도 JSON-LD의 `offers.price`가 실제 가격)
+- **`cafe.naver.com`(구 중고나라 카페 링크)**: 클라이언트에서만 렌더링되는 SPA라 og태그·JSON-LD
+  모두 존재하지 않음 (실측 확인) — 요청조차 보내지 않고 바로 `scrape_ok: False` 처리 →
+  `SCRAPE_FAILED` 반환. 같은 매물이라도 `web.joongna.com` 링크는 정상 동작.
 
 ## 실행
 
@@ -159,4 +173,6 @@ analyze 할 때마다 DB에 저장되고 `item_id`가 1씩 증가한다. history
 - [x] STEP 6: /analyze 통합 — `ai_report.py` (Upstage Solar 보강, 키 없으면 스킵) + DB 저장
 - [x] STEP 7: 나머지 API는 저장 데이터 재활용 (LLM 재호출 금지)
 
-남은 것: Supabase 전환(선택), 당근마켓/중고나라 스크래핑 강화(현재 og태그 기반), 배포.
+- [x] STEP 8: 당근마켓/중고나라 스크래핑 정확도 개선 — JSON-LD 파싱 추가, `cafe.naver.com` 미지원 확인 및 정직한 실패 처리, `analyze()`가 `scrape_ok` 반영하도록 수정 (2026-08-01)
+
+남은 것: Supabase 전환(선택), 배포. (`cafe.naver.com` 실제 지원은 비공식 네이버 카페 API 연동이 필요 — 보류)

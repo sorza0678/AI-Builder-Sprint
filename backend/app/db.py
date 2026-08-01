@@ -264,6 +264,62 @@ def get_comparison_items(user_id: str) -> list[dict]:
     return get_multiple_analyses([row["analysis_id"] for row in rows])
 
 
+def upsert_listing_details(
+    user_id: str,
+    analysis_id: int,
+    title: str,
+    price: int,
+    model_name: str,
+    year: str,
+    size_or_capacity: str,
+    color: str,
+    usage_period: str,
+    components: list[str],
+    defects: list[str],
+) -> str:
+    """화면2 확인/수정된 매물 상세 upsert (매물당 1개, 이력 아님) → updated_at(ISO, 'Z' 접미사) 반환."""
+    ensure_user(user_id)
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO listing_details
+                (user_id, analysis_id, title, price, model_name, year,
+                 size_or_capacity, color, usage_period, components_json, defects_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, analysis_id) DO UPDATE SET
+                title = excluded.title,
+                price = excluded.price,
+                model_name = excluded.model_name,
+                year = excluded.year,
+                size_or_capacity = excluded.size_or_capacity,
+                color = excluded.color,
+                usage_period = excluded.usage_period,
+                components_json = excluded.components_json,
+                defects_json = excluded.defects_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                user_id,
+                analysis_id,
+                title,
+                price,
+                model_name,
+                year,
+                size_or_capacity,
+                color,
+                usage_period,
+                json.dumps(components),
+                json.dumps(defects),
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT updated_at FROM listing_details WHERE user_id = ? AND analysis_id = ?",
+            (user_id, analysis_id),
+        ).fetchone()
+    return row["updated_at"].replace(" ", "T") + "Z"
+
+
 def get_mypage_summary(user_id: str) -> dict:
     """마이페이지 상단 요약 — 기존/신규 테이블 COUNT만으로 구성 (별도 집계 테이블 없음)."""
     with get_db() as conn:

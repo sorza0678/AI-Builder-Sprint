@@ -40,6 +40,8 @@ from app.schemas import (
     HistorySuccess,
     InquiryScriptRequest,
     InquiryScriptSuccess,
+    ListingRequest,
+    ListingSuccess,
     MyPageSuccess,
     TransactionListSuccess,
     TransactionRequest,
@@ -131,6 +133,9 @@ def analyze(req: AnalyzeRequest):
 
     # --- 실제 파이프라인: 수집 → 시세 → Rule Engine → AI 보강 → 저장 ---
     listing = scraper.scrape_listing(req.url)
+    if not listing["scrape_ok"]:
+        return error(400, "SCRAPE_FAILED", "매물 페이지를 불러오지 못했습니다. URL을 확인해주세요.")
+
     avg, measured = market_price.get_market_price(listing["title"], listing["price"])
     verdict = rule_engine.evaluate(listing, avg, measured)
     verdict = ai_report.merge_report(verdict, ai_report.get_ai_report(listing))
@@ -315,6 +320,32 @@ def remove_bookmark(
 def list_bookmarks(user_id: str = Query(examples=["demo-user-1"])):
     items = db.get_bookmarks(user_id)
     return success({"items": items, "total": len(items)})
+
+
+@app.post(
+    "/api/v1/listing",
+    response_model=ListingSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["listing"],
+    summary="화면2 확인된 매물 상세 저장 (upsert)",
+)
+def upsert_listing(req: ListingRequest):
+    if not db.get_analysis_by_id(req.item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    updated_at = db.upsert_listing_details(
+        req.user_id,
+        req.item_id,
+        req.title,
+        req.price,
+        req.model_name,
+        req.year,
+        req.size_or_capacity,
+        req.color,
+        req.usage_period,
+        req.components,
+        req.defects,
+    )
+    return success({**req.model_dump(exclude={"user_id"}), "updated_at": updated_at})
 
 
 @app.get(

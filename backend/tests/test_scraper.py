@@ -1,0 +1,113 @@
+"""scraper.py 스크래핑 정확도·안전성 검증.
+
+JSON-LD 파싱과 cafe.naver.com 단락 처리는 실제 매물 페이지(daangn.com,
+web.joongna.com, cafe.naver.com)에 대한 실측 확인을 거쳐 작성됨.
+네트워크 호출 없이 동작을 검증하기 위해 httpx.get 은 fixture HTML로 monkeypatch한다.
+"""
+import httpx
+import pytest
+
+from app import scraper
+
+
+class _FakeResponse:
+    def __init__(self, text: str, status_code: int = 200):
+        self.text = text
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        pass
+
+
+DAANGN_HTML = """
+<html><head>
+<meta property="og:title" content="아이폰 se6 | 디지털기기 | 당근 중고거래">
+<meta property="og:description" content="중고폰 1ㅇ만원 아이가 중고폰으로구입">
+<meta property="og:image" content="https://karrotmarket.com/_remix/img_og_fallback_kr.png">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "Product", "name": "아이폰 se6",
+ "description": "실제 상품 설명", "image": "https://dnvefa72aowie.cloudfront.net/real.png",
+ "offers": {"@type": "Offer", "price": "120000.0", "priceCurrency": "KRW"}}
+</script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": []}
+</script>
+</head><body></body></html>
+"""
+
+CAFE_NAVER_SHELL_HTML = """
+<html><head><title>중고나라 : 네이버 카페</title></head>
+<body><iframe id="cafe_main" src="about:blank"></iframe></body></html>
+"""
+
+
+def test_json_ld_product_preferred_over_og_tags(monkeypatch):
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(DAANGN_HTML))
+
+    result = scraper.scrape_listing("https://www.daangn.com/kr/buy-sell/example-abc123/")
+
+    assert result["scrape_ok"] is True
+    assert result["title"] == "아이폰 se6"
+    assert result["price"] == 120_000  # JSON-LD offers.price, not the "1ㅇ만원" text in og:description
+    assert result["image"] == "https://dnvefa72aowie.cloudfront.net/real.png"
+
+
+def test_falls_back_to_og_tags_when_no_ld_json(monkeypatch):
+    html = (
+        '<html><head><meta property="og:title" content="번개장터st 매물">'
+        '<meta property="og:description" content="가격: 50,000원">'
+        '<meta property="og:image" content="https://example.com/img.png"></head></html>'
+    )
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(html))
+
+    result = scraper.scrape_listing("https://joongna.com/product/1")
+
+    assert result["scrape_ok"] is True
+    assert result["title"] == "번개장터st 매물"
+    assert result["price"] == 50_000
+    assert result["image"] == "https://example.com/img.png"
+
+
+def test_cafe_naver_com_short_circuits_without_network_call(monkeypatch):
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("cafe.naver.com should not trigger an HTTP request")
+
+    monkeypatch.setattr(httpx, "get", _fail_if_called)
+
+    result = scraper.scrape_listing("https://cafe.naver.com/joonggonara/665605032")
+
+    assert result["scrape_ok"] is False
+    assert result["platform"] == "joongna"
+
+
+def test_cafe_naver_com_would_otherwise_look_like_a_success(monkeypatch):
+    """회귀 확인용: 단락 처리가 없으면 SPA 쉘의 제네릭 <title>이 '성공'으로 오인된다."""
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(CAFE_NAVER_SHELL_HTML))
+
+    title = scraper._meta(CAFE_NAVER_SHELL_HTML, "og:title")
+    assert title is None  # og:title 자체가 없음 — <title> 태그만으로는 실제 매물 여부를 알 수 없다
+
+
+@pytest.mark.parametrize(
+    "offers,expected",
+    [
+        ({"price": "8000"}, 8_000),
+        ({"price": 8000}, 8_000),
+        ([{"price": "5000"}], 5_000),  # 일부 사이트는 offers를 배열로 감싼다
+        ({"price": "999"}, None),  # 하한(1,000원) 미만은 오탐으로 간주해 버림
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_price_from_offers(offers, expected):
+    assert scraper._price_from_offers(offers) == expected
+
+
+def test_find_ld_product_ignores_non_product_blocks_and_malformed_json():
+    html = """
+    <script type="application/ld+json">not valid json</script>
+    <script type="application/ld+json">{"@type": "BreadcrumbList"}</script>
+    <script type="application/ld+json">{"@type": "Product", "name": "실제 상품"}</script>
+    """
+    product = scraper._find_ld_product(html)
+    assert product == {"@type": "Product", "name": "실제 상품"}

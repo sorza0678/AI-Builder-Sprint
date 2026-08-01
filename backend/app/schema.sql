@@ -57,3 +57,26 @@ CREATE TABLE IF NOT EXISTS comparison_items (
 
 CREATE INDEX IF NOT EXISTS idx_transaction_user ON transaction_status(user_id);
 CREATE INDEX IF NOT EXISTS idx_comparison_user ON comparison_items(user_id);
+
+-- Backend B: 화면2(분석 확인) — AI 추정을 사용자가 확인/수정한 매물 상세 (매물당 1개, 이력 아님)
+CREATE TABLE IF NOT EXISTS listing_details (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    analysis_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    price INTEGER NOT NULL,
+    model_name TEXT NOT NULL,
+    year TEXT NOT NULL,
+    size_or_capacity TEXT NOT NULL,
+    color TEXT NOT NULL,
+    usage_period TEXT NOT NULL,
+    components_json TEXT NOT NULL,
+    defects_json TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (analysis_id) REFERENCES analysis_history(id),
+    UNIQUE (user_id, analysis_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_listing_details_user ON listing_details(user_id);
