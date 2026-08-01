@@ -45,6 +45,29 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 - Backend B의 `/listing`, Frontend 화면4가 이 스키마에 의존 — **필드 변경 시 팀 공지 필수**
 - 에러코드: `SCRAPE_FAILED`(400) · `ITEM_NOT_FOUND`(404) · `VALIDATION_ERROR`(422) · `INTERNAL_ERROR`(500) — 전부 공통 `{ok,data,error}` 형식
 
+⚠️ **`risk_level` enum이 프론트와 다름 — 실연동 전에 확인 필요 (B 제안, 2026-08-02)**
+
+백엔드 `risk_level`은 `"SAFE" | "WARNING" | "DANGER"`(`backend/app/schemas.py`, `schema.sql`의
+`analysis_history.risk_level` CHECK 제약)인데, 프론트 `RiskLevel` 타입(`frontend/src/types/marketplace.ts:3`)은
+`'LOW' | 'MEDIUM' | 'HIGH'`로 완전히 다른 값이다. 지금은 프론트가 실제 API를 하나도 호출하지 않는
+mock 전용 상태라 문제가 드러나지 않지만, 실연동 순간 확인된 구체적 버그 2개가 있다:
+
+- `frontend/src/components/analysis-result-view.tsx:86-88` — `riskPenalty = { LOW: 0, MEDIUM: 8, HIGH: 18 }`에
+  `SAFE`/`WARNING`/`DANGER` 값을 넣으면 `riskPenalty[result.riskLevel]`가 `undefined` → 점수 계산이
+  `NaN`이 되어 화면 점수가 깨짐
+- 같은 파일 `:242` — `riskLevel === 'LOW' ? '높음' : ... : '낮음'` 삼항 체인이 `SAFE`/`WARNING`/`DANGER`
+  전부 마지막 분기로 빠져서, 실제로는 안전한(`SAFE`) 매물인데 "가격 신뢰도: 낮음"으로 잘못 표시됨(크래시는
+  안 나고 조용히 틀린 값이 뜨는 게 더 위험)
+
+**B 제안**: 백엔드 enum(`SAFE|WARNING|DANGER`, A의 확정 계약 + DB CHECK 제약 + rule_engine 로직에 이미
+박혀있음)을 바꾸는 대신, **프론트가 실제 연동하는 시점에 `SAFE→LOW, WARNING→MEDIUM, DANGER→HIGH`
+매핑 함수 하나를 데이터 수신 지점(API 응답 → `AnalysisResult` 변환 레이어)에 추가**하는 쪽을 권장한다.
+이유: 백엔드 쪽을 바꾸려면 A의 이미 테스트된 `rule_engine.py` 로직 + DB CHECK 제약 + "확정" 계약 문서를
+전부 건드려야 해서 블라스트 반경이 크고, 반대로 프론트 쪽은 매핑 함수 하나로 끝남. `conditionGrade`
+(A/B/C/D) 같은 다른 필드들도 실연동 시 비슷한 매핑이 필요할 수 있으니, 이 참에 "백엔드 원시값 → 프론트
+표시값" 변환을 한 군데(예: `analysis-service.ts`의 API 응답 파싱 지점)로 모아두는 걸 제안. B가 코드로
+구현할 부분은 없음(프론트 파일이라 연동 담당자 몫) — 여기 기록해서 실연동 시점에 놓치지 않게 하는 것까지가 B의 역할.
+
 ### 나머지 A 엔드포인트 (구현 완료)
 
 - `POST /api/v1/compare` — `item_ids` 2~3개 비교 + `recommendation` 한 줄
@@ -81,11 +104,11 @@ product_status     { defects_found: list[str], missing_components: list[str] }
   데이터가 없고(scraper가 판매자 위치를 수집하지 않음), "추천"은 `market_price.py`가 검색 결과를 가격만
   남기고 버려서(`search_prices()`) 지어내지 않고는 채울 데이터가 없음. 둘 다 새 데이터 수집/설계가 필요한
   별개 작업.
-- `POST /api/v1/listing` — 화면2(분석 확인) 확인/수정된 매물 상세(모델명·연식·사이즈·색상·사용기간·구성품·하자·상품명·가격) upsert, `analysis_id`당 1행 (B, 2026-08-02). `analysis_history`와 분리된 별도 테이블 — Document Parse 파이프라인(AI 최초 추정)과 겹치지 않음, "사람이 확정한 최종본"만 저장. **범위를 의도적으로 좁게 잡음**: GET/DELETE 없음(재확인은 POST 재호출로 덮어씀), `/history`·`/bookmark`·`/comparison`·`/mypage` 등 목록 화면에는 반영되지 않음(그 화면들은 여전히 `analysis_history` 원본만 보여줌) — 필요해지면 별도 논의.
+- `POST/GET /api/v1/listing` — 화면2(분석 확인) 확인/수정된 매물 상세(모델명·연식·사이즈·색상·사용기간·구성품·하자·상품명·가격) upsert/단건 조회, `analysis_id`당 1행 (B, 2026-08-02). `analysis_history`와 분리된 별도 테이블 — Document Parse 파이프라인(AI 최초 추정)과 겹치지 않음, "사람이 확정한 최종본"만 저장. GET은 **2026-08-02 추가** — 처음엔 POST만 만들었다가, 화면2 재오픈/재확인 시나리오가 예상돼 나중에 추가함. `item_id`가 `analysis_history`에 없으면 `404 ITEM_NOT_FOUND`, 있지만 아직 `/listing`으로 저장한 적 없으면(또는 다른 user_id 소유면) `404 LISTING_NOT_FOUND`(신규 코드, 둘을 구분해야 프론트가 "잘못된 id"와 "아직 확인 안 함"을 다르게 처리 가능). **여전히 의도적으로 안 만든 것**: DELETE(재확인은 POST 재호출로 덮어씀, 유스케이스 없음), user의 전체 저장 목록 조회. `/history`·`/bookmark`·`/comparison`·`/mypage` 등 목록 화면에는 여전히 반영 안 됨(그 화면들은 `analysis_history` 원본만 보여줌) — 필요해지면 별도 논의.
 
 ⚠️ **프론트 연동 전제**: 현재 화면2(`analysis-confirm-sheet.tsx`)는 `/analyze` 호출 **이전**에 뜨고 100% mock 데이터(`getRecentListings()`)로 채워진다. `/listing`은 이미 존재하는 `item_id`(=`/analyze`가 만든 `analysis_history` PK)에 종속되므로, 실제로 연결하려면 프론트가 흐름을 "URL/이미지 제출 → `/analyze` 호출 → 그 결과로 화면2 표시 → 확인 시 `/listing` 저장"으로 재배치해야 한다 — 프론트팀 확인 필요.
 
-테스트 `backend/tests/test_service_endpoints.py` (27개, `/listing` 6개·`/transaction` 10개 포함) 참고.
+테스트 `backend/tests/test_service_endpoints.py` (31개, `/listing` 10개·`/transaction` 10개 포함) 참고.
 
 ## 공통 규칙
 
@@ -141,9 +164,33 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 - `comparison_items(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) — bookmarks와 동일 구조 (B, 2026-07-31)
 - `listing_details(id, user_id, analysis_id, title, price, model_name, year, size_or_capacity, color, usage_period, components_json, defects_json, created_at, updated_at)` — UNIQUE(user_id, analysis_id), `transaction_status`와 동일한 upsert 패턴 (B, 2026-08-02)
 
-로컬 파일 `backend/resale_guard.db` (gitignore). 스키마는 Supabase(PostgreSQL) 호환으로 작성됨 —
-전환 시 `raw_analysis_json TEXT` → `JSONB`, `AUTOINCREMENT` → `BIGSERIAL`만 바꾸면 된다 (`DATABASE_URL`은 `.env`).
+로컬 파일 `backend/resale_guard.db` (gitignore).
 FK 제약은 `PRAGMA foreign_keys=ON`으로 실제 적용됨 (2026-07-31 수정 — 이전엔 선언만 되고 sqlite3 기본값 때문에 무시되고 있었음).
+
+### SQLite ↔ Postgres(Supabase) 이중 백엔드 (2026-08-02)
+
+`backend/app/db.py`가 `DATABASE_URL` 환경변수 유무로 자동 분기한다 — 없으면 지금처럼 SQLite(로컬 개발·
+테스트, **무변경**), 있으면 Postgres(psycopg2). 배포(Render 등)는 이번 스코프에 포함 안 함 — DB 계층만.
+
+- 스키마 파일 2개: `backend/app/schema.sql`(SQLite, 기존) / `backend/app/schema_postgres.sql`(신규,
+  차이는 `AUTOINCREMENT` → `BIGSERIAL`뿐). `raw_analysis_json`/`components_json`/`defects_json`은
+  Postgres에서도 **JSONB가 아니라 TEXT 유지** — 기존 `json.dumps`/`json.loads` 수동 관리와 psycopg2의
+  JSONB 자동 adapt가 충돌하지 않게 하려는 의도적 선택 (이전에 이 문서에 "JSONB로 바꾸면 된다"고 적혀
+  있던 건 이제 틀린 내용 — TEXT 유지로 확정).
+  헬퍼 3개(`_is_postgres()`, `_execute()`, `_iso_z()`)만 추가해 `?`→`%s` 변환·타임스탬프
+  문자열/datetime 차이를 흡수 — SQLite 3.35+/Postgres 공통으로 `RETURNING`과
+  `ON CONFLICT ... DO NOTHING`/`DO UPDATE`를 쓰므로 `.lastrowid`·`INSERT OR IGNORE` 같은 진짜
+  SQLite 전용 구문만 걷어냈다.
+- 테스트는 `client` fixture가 `monkeypatch.delenv("DATABASE_URL", raising=False)`로 항상 SQLite를
+  쓰도록 강제 — 로컬 `.env`에 실제 Supabase `DATABASE_URL`을 넣어놔도 `pytest`는 안 새어나감. 54개
+  전부 무변경으로 통과 확인.
+- ⚠️ **아직 실제 Supabase로 검증 안 됨**: `init_db()`가 `schema_postgres.sql` 전체를 파라미터 없는
+  `cur.execute()` 한 번으로 실행하는데(psycopg2/libpq의 simple query protocol이 세미콜론 구분 다중
+  문장을 지원한다는 전제), 실제 네트워크 인스턴스로 스모크 테스트 전까지는 리스크로 남아있음. 실패하면
+  세미콜론 split 후 순차 실행으로 바꾸면 됨(구현 난이도 낮음).
+- ⚠️ **연결 풀링**: 코드 레벨 풀링은 이번에 안 넣음(해커톤 트래픽엔 불필요) — 대신 실제 `DATABASE_URL`을
+  넣을 때 Supabase의 direct connection(5432)이 아니라 **PgBouncer 풀러 URL(6543, `?pgbouncer=true`)**을
+  쓰는 걸 권장. `.env.example` 참고.
 
 ### 미확정 / 논의 필요
 

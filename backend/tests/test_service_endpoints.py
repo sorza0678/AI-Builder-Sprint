@@ -14,6 +14,8 @@ from app.main import app
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    # 로컬 .env에 실제 DATABASE_URL(Supabase)이 있어도 테스트는 항상 SQLite를 쓰도록 강제
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(db, "DATABASE", tmp_path / "test_resale_guard.db")
     with TestClient(app) as c:
         yield c
@@ -397,12 +399,46 @@ def test_listing_does_not_mutate_analysis_history(client):
     assert after["price"] == before["price"]
 
 
+def test_listing_get_after_upsert_returns_saved_fields(client):
+    item_id = _analyze(client)
+    client.post("/api/v1/listing", json=_listing_payload(item_id))
+
+    r = client.get("/api/v1/listing", params={"user_id": "u1", "item_id": item_id})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["item_id"] == item_id
+    assert data["model_name"] == "iPhone 13 Pro"
+    assert data["components"] == ["박스", "충전기"]
+    assert data["defects"] == ["액정 미세 스크래치"]
+
+
+def test_listing_get_before_upsert_returns_listing_not_found(client):
+    item_id = _analyze(client)
+    r = client.get("/api/v1/listing", params={"user_id": "u1", "item_id": item_id})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "LISTING_NOT_FOUND"
+
+
+def test_listing_get_unknown_item_returns_item_not_found(client):
+    r = client.get("/api/v1/listing", params={"user_id": "u1", "item_id": 9999})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "ITEM_NOT_FOUND"
+
+
+def test_listing_get_scoped_to_user(client):
+    item_id = _analyze(client)
+    client.post("/api/v1/listing", json=_listing_payload(item_id))
+
+    r = client.get("/api/v1/listing", params={"user_id": "u2", "item_id": item_id})
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "LISTING_NOT_FOUND"
+
+
 # ---------- FK 회귀 방지 (기존 버그: PRAGMA foreign_keys 미적용) ----------
 
 def test_foreign_key_enforcement_rejects_unknown_analysis_id(client):
-    with pytest.raises(sqlite3.IntegrityError):
-        with db.get_db() as conn:
-            conn.execute(
-                "INSERT INTO comparison_items(user_id, analysis_id) VALUES ('ghost', 999999)"
-            )
-            conn.commit()
+    with pytest.raises(sqlite3.IntegrityError), db.get_db() as conn:
+        conn.execute(
+            "INSERT INTO comparison_items(user_id, analysis_id) VALUES ('ghost', 999999)"
+        )
+        conn.commit()
