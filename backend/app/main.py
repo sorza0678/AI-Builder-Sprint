@@ -151,21 +151,6 @@ def analyze(req: AnalyzeRequest):
     return success({**data, "item_id": analysis_id})
 
 
-@app.get(
-    "/api/v1/history",
-    response_model=HistorySuccess,
-    tags=["history"],
-    summary="유저의 분석 히스토리 (최신순)",
-)
-def history(
-    user_id: str = Query(examples=["demo-user-1"]),
-    page: int = Query(1, ge=1),
-    size: int = Query(10, ge=1, le=50),
-):
-    items, total = db.get_history(user_id, page, size)
-    return success({"items": items, "page": page, "size": size, "total": total})
-
-
 @app.post(
     "/api/v1/compare",
     response_model=CompareSuccess,
@@ -214,6 +199,21 @@ def inquiry_script(req: InquiryScriptRequest):
     if not analysis:
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
     return success({"item_id": req.item_id, "script": mock_data.build_inquiry_script(analysis)})
+
+
+@app.get(
+    "/api/v1/history",
+    response_model=HistorySuccess,
+    tags=["history"],
+    summary="유저의 분석 히스토리 (최신순)",
+)
+def history(
+    user_id: str = Query(examples=["demo-user-1"]),
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=50),
+):
+    items, total = db.get_history(user_id, page, size)
+    return success({"items": items, "page": page, "size": size, "total": total})
 
 
 @app.post(

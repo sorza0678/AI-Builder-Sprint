@@ -47,13 +47,11 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 
 ### 나머지 A 엔드포인트 (구현 완료)
 
-- `GET /api/v1/history?user_id=&page=&size=` — 분석 히스토리 (최신순 페이지네이션)
 - `POST /api/v1/compare` — `item_ids` 2~3개 비교 + `recommendation` 한 줄
 - `POST /api/v1/checklist` — 현장 확인 체크리스트 (역할표의 `/generate-questions`에 해당)
 - `POST /api/v1/inquiry-script` — 판매자 문의 메시지 (역할표의 `/generate-negotiation`에 해당)
 
 ⚠️ 경로 이름이 역할표와 다름(`/checklist`·`/inquiry-script`로 구현됨) — 통일 필요하면 팀 논의.
-`/history`는 역할표상 B 소관이지만 현재 A가 분석 히스토리 조회용으로 임시 제공 중 — B 서비스로 이관/통합 여부 논의 필요.
 
 ⚠️ **`/analyze` 동작 변경 (2026-08-01)**: 스크래핑이 실제로 실패하면(예: `cafe.naver.com`처럼
 지원 안 되는 사이트) 이전엔 fallback 고정 데이터로 200을 반환했지만, 이제 `400 SCRAPE_FAILED`를
@@ -66,6 +64,7 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 
 > 화면5(거래 준비)·화면6(마이페이지) 대응. 공통 `{ok,data,error}` 형식 동일, `item_id` 기준 404 `ITEM_NOT_FOUND` 처리 동일.
 
+- `GET /api/v1/history?user_id=&page=&size=` — 분석 히스토리 (최신순 페이지네이션). A가 임시 제공하던 것을 B로 이관 완료 (2026-08-02) — 코드 위치도 `main.py`/`db.py`/`schemas.py` 전부 B 블록으로 실제 이동, API 계약·동작 변경 없음(순수 이동). 테스트 4개 추가(`test_service_endpoints.py`).
 - `POST/GET /api/v1/transaction` — 거래 상태 등록(upsert, 매물당 1개)/목록 조회(`status` 쿼리로 필터). `status`: `PLANNED|CONTACTED|ON_HOLD|COMPLETED|EXCLUDED`
 - `POST/DELETE/GET /api/v1/comparison` — 비교 후보 목록 추가/제거/조회
 - `POST/DELETE/GET /api/v1/bookmark` — 찜 추가/제거/조회 (`bookmarks` 테이블은 A가 이미 생성, 엔드포인트는 B가 구현)
@@ -136,7 +135,6 @@ FK 제약은 `PRAGMA foreign_keys=ON`으로 실제 적용됨 (2026-07-31 수정 
 
 ### 미확정 / 논의 필요
 
-- `/history`를 B로 이관할지 — 현재 A가 임시 제공 중 (위 "Backend B 엔드포인트" 절 참고)
 - 화면2 흐름 순서 — 위 "Backend B 엔드포인트" 절의 `/listing` 프론트 연동 전제 참고
 
 ### Git 작업

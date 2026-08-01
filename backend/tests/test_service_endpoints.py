@@ -25,6 +25,55 @@ def _analyze(client, url="mock-safe-test", user_id="u1") -> int:
     return r.json()["data"]["item_id"]
 
 
+# ---------- /history ----------
+
+def test_history_returns_items_newest_first(client):
+    first_id = _analyze(client)
+    second_id = _analyze(client)
+
+    r = client.get("/api/v1/history", params={"user_id": "u1"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    item_ids = [item["item_id"] for item in data["items"]]
+    assert item_ids == [second_id, first_id]
+
+    item = data["items"][0]
+    assert set(item.keys()) == {
+        "item_id", "source_url", "title", "price", "trust_score", "risk_level", "created_at",
+    }
+
+
+def test_history_pagination(client):
+    for _ in range(3):
+        _analyze(client)
+
+    r = client.get("/api/v1/history", params={"user_id": "u1", "page": 1, "size": 2})
+    data = r.json()["data"]
+    assert len(data["items"]) == 2
+    assert data["total"] == 3
+
+    r = client.get("/api/v1/history", params={"user_id": "u1", "page": 2, "size": 2})
+    data = r.json()["data"]
+    assert len(data["items"]) == 1
+    assert data["total"] == 3
+
+
+def test_history_scoped_to_user(client):
+    _analyze(client, user_id="u1")
+    _analyze(client, user_id="u2")
+
+    r = client.get("/api/v1/history", params={"user_id": "u1"})
+    data = r.json()["data"]
+    assert data["total"] == 1
+
+
+def test_history_empty_user_returns_empty_list(client):
+    r = client.get("/api/v1/history", params={"user_id": "brand-new-user"})
+    data = r.json()["data"]
+    assert data["items"] == []
+    assert data["total"] == 0
+
+
 # ---------- /transaction ----------
 
 def test_transaction_set_and_get(client):

@@ -76,49 +76,6 @@ def save_analysis(
         return analysis_id
 
 
-def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]:
-    """
-    분석 히스토리 조회 (최신순).
-    → (items_list, total_count)
-    """
-    with get_db() as conn:
-        total = conn.execute(
-            "SELECT COUNT(*) as cnt FROM analysis_history WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()["cnt"]
-
-        offset = (page - 1) * size
-        rows = conn.execute(
-            """
-            SELECT id, source_url, title, price, trust_score, risk_level,
-                   raw_analysis_json, created_at
-            FROM analysis_history
-            WHERE user_id = ?
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (user_id, size, offset),
-        ).fetchall()
-
-    return (
-        [
-            {
-                "item_id": row["id"],
-                "source_url": row["source_url"],
-                "title": row["title"],
-                "price": row["price"],
-                "trust_score": row["trust_score"],
-                "risk_level": row["risk_level"],
-                # SQLite CURRENT_TIMESTAMP 는 UTC — 'Z'를 붙여 aware datetime 으로
-                # 내보내야 프론트(JS Date)가 로컬시간으로 올바르게 변환한다
-                "created_at": row["created_at"].replace(" ", "T") + "Z",
-            }
-            for row in rows
-        ],
-        total,
-    )
-
-
 def get_analysis_by_id(analysis_id: int) -> Optional[dict]:
     """분석 결과 조회 (raw_analysis_json에서 full data 파싱)."""
     with get_db() as conn:
@@ -175,6 +132,49 @@ def get_bookmarks(user_id: str) -> list[dict]:
             (user_id,),
         ).fetchall()
     return get_multiple_analyses([row["analysis_id"] for row in rows])
+
+
+def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]:
+    """
+    분석 히스토리 조회 (최신순).
+    → (items_list, total_count)
+    """
+    with get_db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) as cnt FROM analysis_history WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["cnt"]
+
+        offset = (page - 1) * size
+        rows = conn.execute(
+            """
+            SELECT id, source_url, title, price, trust_score, risk_level,
+                   raw_analysis_json, created_at
+            FROM analysis_history
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, size, offset),
+        ).fetchall()
+
+    return (
+        [
+            {
+                "item_id": row["id"],
+                "source_url": row["source_url"],
+                "title": row["title"],
+                "price": row["price"],
+                "trust_score": row["trust_score"],
+                "risk_level": row["risk_level"],
+                # SQLite CURRENT_TIMESTAMP 는 UTC — 'Z'를 붙여 aware datetime 으로
+                # 내보내야 프론트(JS Date)가 로컬시간으로 올바르게 변환한다
+                "created_at": row["created_at"].replace(" ", "T") + "Z",
+            }
+            for row in rows
+        ],
+        total,
+    )
 
 
 def set_transaction_status(user_id: str, analysis_id: int, status: str) -> str:

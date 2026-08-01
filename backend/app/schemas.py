@@ -54,31 +54,6 @@ class AnalyzeSuccess(BaseModel):
     error: None = None
 
 
-# ---------- /history ----------
-
-class HistoryItem(BaseModel):
-    item_id: int
-    source_url: str
-    title: str
-    price: int
-    trust_score: int
-    risk_level: RiskLevel
-    created_at: datetime
-
-
-class HistoryData(BaseModel):
-    items: list[HistoryItem]
-    page: int
-    size: int
-    total: int
-
-
-class HistorySuccess(BaseModel):
-    ok: Literal[True] = True
-    data: HistoryData
-    error: None = None
-
-
 # ---------- /compare ----------
 
 class CompareRequest(BaseModel):
@@ -133,6 +108,31 @@ class InquiryScriptData(BaseModel):
 class InquiryScriptSuccess(BaseModel):
     ok: Literal[True] = True
     data: InquiryScriptData
+    error: None = None
+
+
+# ---------- /history ----------
+
+class HistoryItem(BaseModel):
+    item_id: int
+    source_url: str
+    title: str
+    price: int
+    trust_score: int
+    risk_level: RiskLevel
+    created_at: datetime
+
+
+class HistoryData(BaseModel):
+    items: list[HistoryItem]
+    page: int
+    size: int
+    total: int
+
+
+class HistorySuccess(BaseModel):
+    ok: Literal[True] = True
+    data: HistoryData
     error: None = None
 
 
