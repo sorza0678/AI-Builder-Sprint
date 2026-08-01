@@ -384,6 +384,31 @@ def upsert_listing_details(
     return _iso_z(row["updated_at"])
 
 
+def get_listing_details(user_id: str, analysis_id: int) -> Optional[dict]:
+    """화면2 확인/수정된 매물 상세 조회 (없으면 None)."""
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            "SELECT * FROM listing_details WHERE user_id = ? AND analysis_id = ?",
+            (user_id, analysis_id),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "item_id": row["analysis_id"],
+        "title": row["title"],
+        "price": row["price"],
+        "model_name": row["model_name"],
+        "year": row["year"],
+        "size_or_capacity": row["size_or_capacity"],
+        "color": row["color"],
+        "usage_period": row["usage_period"],
+        "components": json.loads(row["components_json"]),
+        "defects": json.loads(row["defects_json"]),
+        "updated_at": _iso_z(row["updated_at"]),
+    }
+
+
 def get_mypage_summary(user_id: str, recent_limit: int = 5) -> dict:
     """마이페이지 상단 요약 — 기존/신규 테이블 COUNT + 최근 분석 목록(기존 get_history 재사용)."""
     with get_db() as conn:

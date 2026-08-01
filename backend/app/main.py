@@ -353,6 +353,25 @@ def upsert_listing(req: ListingRequest):
 
 
 @app.get(
+    "/api/v1/listing",
+    response_model=ListingSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["listing"],
+    summary="확인된 매물 상세 조회",
+)
+def get_listing(
+    user_id: str = Query(examples=["demo-user-1"]),
+    item_id: int = Query(examples=[1]),
+):
+    if not db.get_analysis_by_id(item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
+    detail = db.get_listing_details(user_id, item_id)
+    if not detail:
+        return error(404, "LISTING_NOT_FOUND", f"아직 확인/저장된 매물 상세가 없는 item_id: {item_id}")
+    return success(detail)
+
+
+@app.get(
     "/api/v1/mypage",
     response_model=MyPageSuccess,
     tags=["mypage"],

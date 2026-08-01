@@ -104,11 +104,11 @@ mock 전용 상태라 문제가 드러나지 않지만, 실연동 순간 확인�
   데이터가 없고(scraper가 판매자 위치를 수집하지 않음), "추천"은 `market_price.py`가 검색 결과를 가격만
   남기고 버려서(`search_prices()`) 지어내지 않고는 채울 데이터가 없음. 둘 다 새 데이터 수집/설계가 필요한
   별개 작업.
-- `POST /api/v1/listing` — 화면2(분석 확인) 확인/수정된 매물 상세(모델명·연식·사이즈·색상·사용기간·구성품·하자·상품명·가격) upsert, `analysis_id`당 1행 (B, 2026-08-02). `analysis_history`와 분리된 별도 테이블 — Document Parse 파이프라인(AI 최초 추정)과 겹치지 않음, "사람이 확정한 최종본"만 저장. **범위를 의도적으로 좁게 잡음**: GET/DELETE 없음(재확인은 POST 재호출로 덮어씀), `/history`·`/bookmark`·`/comparison`·`/mypage` 등 목록 화면에는 반영되지 않음(그 화면들은 여전히 `analysis_history` 원본만 보여줌) — 필요해지면 별도 논의.
+- `POST/GET /api/v1/listing` — 화면2(분석 확인) 확인/수정된 매물 상세(모델명·연식·사이즈·색상·사용기간·구성품·하자·상품명·가격) upsert/단건 조회, `analysis_id`당 1행 (B, 2026-08-02). `analysis_history`와 분리된 별도 테이블 — Document Parse 파이프라인(AI 최초 추정)과 겹치지 않음, "사람이 확정한 최종본"만 저장. GET은 **2026-08-02 추가** — 처음엔 POST만 만들었다가, 화면2 재오픈/재확인 시나리오가 예상돼 나중에 추가함. `item_id`가 `analysis_history`에 없으면 `404 ITEM_NOT_FOUND`, 있지만 아직 `/listing`으로 저장한 적 없으면(또는 다른 user_id 소유면) `404 LISTING_NOT_FOUND`(신규 코드, 둘을 구분해야 프론트가 "잘못된 id"와 "아직 확인 안 함"을 다르게 처리 가능). **여전히 의도적으로 안 만든 것**: DELETE(재확인은 POST 재호출로 덮어씀, 유스케이스 없음), user의 전체 저장 목록 조회. `/history`·`/bookmark`·`/comparison`·`/mypage` 등 목록 화면에는 여전히 반영 안 됨(그 화면들은 `analysis_history` 원본만 보여줌) — 필요해지면 별도 논의.
 
 ⚠️ **프론트 연동 전제**: 현재 화면2(`analysis-confirm-sheet.tsx`)는 `/analyze` 호출 **이전**에 뜨고 100% mock 데이터(`getRecentListings()`)로 채워진다. `/listing`은 이미 존재하는 `item_id`(=`/analyze`가 만든 `analysis_history` PK)에 종속되므로, 실제로 연결하려면 프론트가 흐름을 "URL/이미지 제출 → `/analyze` 호출 → 그 결과로 화면2 표시 → 확인 시 `/listing` 저장"으로 재배치해야 한다 — 프론트팀 확인 필요.
 
-테스트 `backend/tests/test_service_endpoints.py` (27개, `/listing` 6개·`/transaction` 10개 포함) 참고.
+테스트 `backend/tests/test_service_endpoints.py` (31개, `/listing` 10개·`/transaction` 10개 포함) 참고.
 
 ## 공통 규칙
 
