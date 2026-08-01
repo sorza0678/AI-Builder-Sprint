@@ -260,6 +260,42 @@ class BookmarkListSuccess(BaseModel):
     error: None = None
 
 
+# ---------- /listing (화면2 확인/수정된 매물 상세) ----------
+
+class ListingRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+    title: str = Field(examples=["아이폰 13 프로 256GB"])
+    price: int = Field(examples=[850000])
+    model_name: str = Field(examples=["iPhone 13 Pro"])
+    year: str = Field(examples=["2021"])
+    size_or_capacity: str = Field(examples=["256GB"])
+    color: str = Field(examples=["그래파이트"])
+    usage_period: str = Field(examples=["6개월"])
+    components: list[str] = Field(examples=[["박스", "충전기"]])
+    defects: list[str] = Field(examples=[["액정 미세 스크래치"]])
+
+
+class ListingData(BaseModel):
+    item_id: int
+    title: str
+    price: int
+    model_name: str
+    year: str
+    size_or_capacity: str
+    color: str
+    usage_period: str
+    components: list[str]
+    defects: list[str]
+    updated_at: datetime
+
+
+class ListingSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: ListingData
+    error: None = None
+
+
 # ---------- /mypage ----------
 
 class MyPageData(BaseModel):

@@ -40,6 +40,8 @@ from app.schemas import (
     HistorySuccess,
     InquiryScriptRequest,
     InquiryScriptSuccess,
+    ListingRequest,
+    ListingSuccess,
     MyPageSuccess,
     TransactionListSuccess,
     TransactionRequest,
@@ -318,6 +320,32 @@ def remove_bookmark(
 def list_bookmarks(user_id: str = Query(examples=["demo-user-1"])):
     items = db.get_bookmarks(user_id)
     return success({"items": items, "total": len(items)})
+
+
+@app.post(
+    "/api/v1/listing",
+    response_model=ListingSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["listing"],
+    summary="화면2 확인된 매물 상세 저장 (upsert)",
+)
+def upsert_listing(req: ListingRequest):
+    if not db.get_analysis_by_id(req.item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    updated_at = db.upsert_listing_details(
+        req.user_id,
+        req.item_id,
+        req.title,
+        req.price,
+        req.model_name,
+        req.year,
+        req.size_or_capacity,
+        req.color,
+        req.usage_period,
+        req.components,
+        req.defects,
+    )
+    return success({**req.model_dump(exclude={"user_id"}), "updated_at": updated_at})
 
 
 @app.get(
