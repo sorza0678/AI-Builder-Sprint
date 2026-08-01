@@ -131,6 +131,9 @@ def analyze(req: AnalyzeRequest):
 
     # --- 실제 파이프라인: 수집 → 시세 → Rule Engine → AI 보강 → 저장 ---
     listing = scraper.scrape_listing(req.url)
+    if not listing["scrape_ok"]:
+        return error(400, "SCRAPE_FAILED", "매물 페이지를 불러오지 못했습니다. URL을 확인해주세요.")
+
     avg, measured = market_price.get_market_price(listing["title"], listing["price"])
     verdict = rule_engine.evaluate(listing, avg, measured)
     verdict = ai_report.merge_report(verdict, ai_report.get_ai_report(listing))
