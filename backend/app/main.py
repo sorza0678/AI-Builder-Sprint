@@ -43,9 +43,10 @@ from app.schemas import (
     ListingRequest,
     ListingSuccess,
     MyPageSuccess,
+    TransactionDecisionEnum,
     TransactionListSuccess,
     TransactionRequest,
-    TransactionStatusEnum,
+    TransactionStageEnum,
     TransactionSuccess,
 )
 
@@ -226,21 +227,24 @@ def history(
 def set_transaction(req: TransactionRequest):
     if not db.get_analysis_by_id(req.item_id):
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
-    updated_at = db.set_transaction_status(req.user_id, req.item_id, req.status)
-    return success({"item_id": req.item_id, "status": req.status, "updated_at": updated_at})
+    updated_at = db.upsert_transaction_status(req.user_id, req.item_id, req.stage, req.decision)
+    return success(
+        {"item_id": req.item_id, "stage": req.stage, "decision": req.decision, "updated_at": updated_at}
+    )
 
 
 @app.get(
     "/api/v1/transaction",
     response_model=TransactionListSuccess,
     tags=["transaction"],
-    summary="거래 상태 목록 조회 (status 생략 시 전체)",
+    summary="거래 상태 목록 조회 (stage/decision 생략 시 미필터)",
 )
 def list_transactions(
     user_id: str = Query(examples=["demo-user-1"]),
-    status: TransactionStatusEnum | None = Query(None),
+    stage: TransactionStageEnum | None = Query(None),
+    decision: TransactionDecisionEnum | None = Query(None),
 ):
-    items = db.get_transactions(user_id, status)
+    items = db.get_transactions(user_id, stage, decision)
     return success({"items": items, "total": len(items)})
 
 

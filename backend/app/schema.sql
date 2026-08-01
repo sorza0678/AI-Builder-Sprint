@@ -32,11 +32,13 @@ CREATE INDEX IF NOT EXISTS idx_history_user_created ON analysis_history(user_id,
 CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id);
 
 -- Backend B: 화면5(거래 준비) — 매물당 현재 거래 상태 1개 (이력 아님, 상태 변경 시 UPDATE)
+-- stage(진행 단계)·decision(판단)은 프론트 실제 화면상 독립된 2축이라 컬럼도 분리함 (2026-08-02)
 CREATE TABLE IF NOT EXISTS transaction_status (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
     analysis_id INTEGER NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('PLANNED', 'CONTACTED', 'ON_HOLD', 'COMPLETED', 'EXCLUDED')),
+    stage TEXT NOT NULL CHECK (stage IN ('BEFORE_CONTACT', 'CONTACTING', 'SCHEDULED', 'COMPLETED')),
+    decision TEXT CHECK (decision IN ('CONSIDERING', 'HOLD', 'EXCLUDED')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),

@@ -138,18 +138,21 @@ class HistorySuccess(BaseModel):
 
 # ---------- /transaction (화면5 구매 결정 저장) ----------
 
-TransactionStatusEnum = Literal["PLANNED", "CONTACTED", "ON_HOLD", "COMPLETED", "EXCLUDED"]
+TransactionStageEnum = Literal["BEFORE_CONTACT", "CONTACTING", "SCHEDULED", "COMPLETED"]
+TransactionDecisionEnum = Literal["CONSIDERING", "HOLD", "EXCLUDED"]
 
 
 class TransactionRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
     item_id: int = Field(examples=[1])
-    status: TransactionStatusEnum = Field(examples=["PLANNED"])
+    stage: TransactionStageEnum = Field(examples=["CONTACTING"])
+    decision: TransactionDecisionEnum | None = Field(default=None, examples=["CONSIDERING"])
 
 
 class TransactionData(BaseModel):
     item_id: int
-    status: TransactionStatusEnum
+    stage: TransactionStageEnum
+    decision: TransactionDecisionEnum | None
     updated_at: datetime
 
 
@@ -165,7 +168,8 @@ class TransactionListItem(BaseModel):
     price: int
     trust_score: int
     risk_level: RiskLevel
-    status: TransactionStatusEnum
+    stage: TransactionStageEnum
+    decision: TransactionDecisionEnum | None
     updated_at: datetime
 
 

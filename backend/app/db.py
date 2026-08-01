@@ -177,18 +177,21 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
     )
 
 
-def set_transaction_status(user_id: str, analysis_id: int, status: str) -> str:
-    """거래 상태 upsert (매물당 1개, 이력 아님) → updated_at(ISO, 'Z' 접미사) 반환."""
+def upsert_transaction_status(
+    user_id: str, analysis_id: int, stage: str, decision: Optional[str]
+) -> str:
+    """거래 상태(stage+decision) upsert (매물당 1개, 이력 아님, 매 호출마다 두 필드 모두 덮어씀)
+    → updated_at(ISO, 'Z' 접미사) 반환."""
     ensure_user(user_id)
     with get_db() as conn:
         conn.execute(
             """
-            INSERT INTO transaction_status (user_id, analysis_id, status)
-            VALUES (?, ?, ?)
+            INSERT INTO transaction_status (user_id, analysis_id, stage, decision)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id, analysis_id)
-            DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP
+            DO UPDATE SET stage = excluded.stage, decision = excluded.decision, updated_at = CURRENT_TIMESTAMP
             """,
-            (user_id, analysis_id, status),
+            (user_id, analysis_id, stage, decision),
         )
         conn.commit()
         row = conn.execute(
@@ -198,19 +201,24 @@ def set_transaction_status(user_id: str, analysis_id: int, status: str) -> str:
     return row["updated_at"].replace(" ", "T") + "Z"
 
 
-def get_transactions(user_id: str, status: Optional[str] = None) -> list[dict]:
-    """거래 상태 목록 (analysis_history와 조인, 최신 변경순). status 생략 시 전체."""
+def get_transactions(
+    user_id: str, stage: Optional[str] = None, decision: Optional[str] = None
+) -> list[dict]:
+    """거래 상태 목록 (analysis_history와 조인, 최신 변경순). stage/decision 각각 생략 시 미필터."""
     query = """
-        SELECT t.analysis_id, t.status, t.updated_at,
+        SELECT t.analysis_id, t.stage, t.decision, t.updated_at,
                a.title, a.price, a.trust_score, a.risk_level
         FROM transaction_status t
         JOIN analysis_history a ON a.id = t.analysis_id
         WHERE t.user_id = ?
     """
     params: list = [user_id]
-    if status:
-        query += " AND t.status = ?"
-        params.append(status)
+    if stage:
+        query += " AND t.stage = ?"
+        params.append(stage)
+    if decision:
+        query += " AND t.decision = ?"
+        params.append(decision)
     query += " ORDER BY t.updated_at DESC"
     with get_db() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -221,7 +229,8 @@ def get_transactions(user_id: str, status: Optional[str] = None) -> list[dict]:
             "price": row["price"],
             "trust_score": row["trust_score"],
             "risk_level": row["risk_level"],
-            "status": row["status"],
+            "stage": row["stage"],
+            "decision": row["decision"],
             "updated_at": row["updated_at"].replace(" ", "T") + "Z",
         }
         for row in rows
@@ -333,7 +342,7 @@ def get_mypage_summary(user_id: str) -> dict:
             "SELECT COUNT(*) c FROM comparison_items WHERE user_id = ?", (user_id,)
         ).fetchone()["c"]
         transaction_completed_count = conn.execute(
-            "SELECT COUNT(*) c FROM transaction_status WHERE user_id = ? AND status = 'COMPLETED'",
+            "SELECT COUNT(*) c FROM transaction_status WHERE user_id = ? AND stage = 'COMPLETED'",
             (user_id,),
         ).fetchone()["c"]
     return {

@@ -65,7 +65,13 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 > 화면5(거래 준비)·화면6(마이페이지) 대응. 공통 `{ok,data,error}` 형식 동일, `item_id` 기준 404 `ITEM_NOT_FOUND` 처리 동일.
 
 - `GET /api/v1/history?user_id=&page=&size=` — 분석 히스토리 (최신순 페이지네이션). A가 임시 제공하던 것을 B로 이관 완료 (2026-08-02) — 코드 위치도 `main.py`/`db.py`/`schemas.py` 전부 B 블록으로 실제 이동, API 계약·동작 변경 없음(순수 이동). 테스트 4개 추가(`test_service_endpoints.py`).
-- `POST/GET /api/v1/transaction` — 거래 상태 등록(upsert, 매물당 1개)/목록 조회(`status` 쿼리로 필터). `status`: `PLANNED|CONTACTED|ON_HOLD|COMPLETED|EXCLUDED`
+- `POST/GET /api/v1/transaction` — 거래 상태 등록(upsert, 매물당 1개)/목록 조회. **2026-08-02 재설계**: 이전엔 `status`
+  단일 5값 enum(`PLANNED|CONTACTED|ON_HOLD|COMPLETED|EXCLUDED`)이었으나, 실제 거래준비 화면(`trade/[analysisId].tsx`)이
+  진행단계와 판단을 독립된 2축으로 관리하는 걸 확인해 `stage`(`BEFORE_CONTACT|CONTACTING|SCHEDULED|COMPLETED`, 필수) +
+  `decision`(`CONSIDERING|HOLD|EXCLUDED`, optional/nullable)로 분리. POST는 매 호출마다 두 필드 전체 덮어쓰기
+  (`decision` 생략 시 `NULL`로 리셋 — 항상 유지하고 싶은 값은 함께 재전송해야 함). GET은 `stage`/`decision` 각각
+  독립 optional 필터(둘 다 주면 AND). 이 계약은 아직 프론트가 호출한 적 없는 상태에서 바로잡은 것이라 실사용
+  데이터 마이그레이션은 없음. 함수명도 `upsert_transaction_status`로 리네임.
 - `POST/DELETE/GET /api/v1/comparison` — 비교 후보 목록 추가/제거/조회
 - `POST/DELETE/GET /api/v1/bookmark` — 찜 추가/제거/조회 (`bookmarks` 테이블은 A가 이미 생성, 엔드포인트는 B가 구현)
 - `GET /api/v1/mypage` — 상단 요약 `{analysis_count, bookmark_count, comparison_count, transaction_completed_count}` — 별도 집계 테이블 없이 기존/신규 테이블 COUNT 쿼리로 구성
@@ -73,7 +79,7 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 
 ⚠️ **프론트 연동 전제**: 현재 화면2(`analysis-confirm-sheet.tsx`)는 `/analyze` 호출 **이전**에 뜨고 100% mock 데이터(`getRecentListings()`)로 채워진다. `/listing`은 이미 존재하는 `item_id`(=`/analyze`가 만든 `analysis_history` PK)에 종속되므로, 실제로 연결하려면 프론트가 흐름을 "URL/이미지 제출 → `/analyze` 호출 → 그 결과로 화면2 표시 → 확인 시 `/listing` 저장"으로 재배치해야 한다 — 프론트팀 확인 필요.
 
-테스트 `backend/tests/test_service_endpoints.py` (17개, `/listing` 6개 포함) 참고.
+테스트 `backend/tests/test_service_endpoints.py` (26개, `/listing` 6개·`/transaction` 10개 포함) 참고.
 
 ## 공통 규칙
 
@@ -125,7 +131,7 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 - `users(id TEXT PK, created_at)` — user_id는 프론트가 보내는 문자열 (인증 없음)
 - `analysis_history(id, user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json, created_at)` — 분석결과 통째로 JSON 저장, 모든 후속 API가 재사용 (LLM 재호출 금지)
 - `bookmarks(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) — A 생성, B가 `/bookmark` 엔드포인트 구현
-- `transaction_status(id, user_id, analysis_id, status, created_at, updated_at)` — UNIQUE(user_id, analysis_id), `status` CHECK 5종 (B, 2026-07-31)
+- `transaction_status(id, user_id, analysis_id, stage, decision, created_at, updated_at)` — UNIQUE(user_id, analysis_id), `stage` CHECK 4종(필수)·`decision` CHECK 3종(nullable) (B, 2026-07-31, 2026-08-02 `status` 단일 컬럼에서 2축으로 재설계)
 - `comparison_items(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) — bookmarks와 동일 구조 (B, 2026-07-31)
 - `listing_details(id, user_id, analysis_id, title, price, model_name, year, size_or_capacity, color, usage_period, components_json, defects_json, created_at, updated_at)` — UNIQUE(user_id, analysis_id), `transaction_status`와 동일한 upsert 패턴 (B, 2026-08-02)
 
