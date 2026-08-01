@@ -55,6 +55,13 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 ⚠️ 경로 이름이 역할표와 다름(`/checklist`·`/inquiry-script`로 구현됨) — 통일 필요하면 팀 논의.
 `/history`는 역할표상 B 소관이지만 현재 A가 분석 히스토리 조회용으로 임시 제공 중 — B 서비스로 이관/통합 여부 논의 필요.
 
+⚠️ **`/analyze` 동작 변경 (2026-08-01)**: 스크래핑이 실제로 실패하면(예: `cafe.naver.com`처럼
+지원 안 되는 사이트) 이전엔 fallback 고정 데이터로 200을 반환했지만, 이제 `400 SCRAPE_FAILED`를
+반환한다 — 에러코드 자체는 기존 확정 계약에 이미 있었으나 실제 URL 실패에는 지금까지 연결되어
+있지 않았음. 데모 트리거 단어(`danger`·`warning`·`mock-safe`·`fail`)는 영향 없음. 프론트에서 실제
+매물 URL로 테스트할 때 이 응답을 에러로 처리하고 있는지 확인 필요. 자세한 내용은
+`backend/README.md`의 "매물 수집 (scraper) 플랫폼별 동작" 참고.
+
 ### Backend B 엔드포인트 (구현 완료 — 2026-07-31, `feat/service-api` 브랜치)
 
 > 화면5(거래 준비)·화면6(마이페이지) 대응. 공통 `{ok,data,error}` 형식 동일, `item_id` 기준 404 `ITEM_NOT_FOUND` 처리 동일.
