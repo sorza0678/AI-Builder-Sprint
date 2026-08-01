@@ -45,6 +45,29 @@ product_status     { defects_found: list[str], missing_components: list[str] }
 - Backend B의 `/listing`, Frontend 화면4가 이 스키마에 의존 — **필드 변경 시 팀 공지 필수**
 - 에러코드: `SCRAPE_FAILED`(400) · `ITEM_NOT_FOUND`(404) · `VALIDATION_ERROR`(422) · `INTERNAL_ERROR`(500) — 전부 공통 `{ok,data,error}` 형식
 
+⚠️ **`risk_level` enum이 프론트와 다름 — 실연동 전에 확인 필요 (B 제안, 2026-08-02)**
+
+백엔드 `risk_level`은 `"SAFE" | "WARNING" | "DANGER"`(`backend/app/schemas.py`, `schema.sql`의
+`analysis_history.risk_level` CHECK 제약)인데, 프론트 `RiskLevel` 타입(`frontend/src/types/marketplace.ts:3`)은
+`'LOW' | 'MEDIUM' | 'HIGH'`로 완전히 다른 값이다. 지금은 프론트가 실제 API를 하나도 호출하지 않는
+mock 전용 상태라 문제가 드러나지 않지만, 실연동 순간 확인된 구체적 버그 2개가 있다:
+
+- `frontend/src/components/analysis-result-view.tsx:86-88` — `riskPenalty = { LOW: 0, MEDIUM: 8, HIGH: 18 }`에
+  `SAFE`/`WARNING`/`DANGER` 값을 넣으면 `riskPenalty[result.riskLevel]`가 `undefined` → 점수 계산이
+  `NaN`이 되어 화면 점수가 깨짐
+- 같은 파일 `:242` — `riskLevel === 'LOW' ? '높음' : ... : '낮음'` 삼항 체인이 `SAFE`/`WARNING`/`DANGER`
+  전부 마지막 분기로 빠져서, 실제로는 안전한(`SAFE`) 매물인데 "가격 신뢰도: 낮음"으로 잘못 표시됨(크래시는
+  안 나고 조용히 틀린 값이 뜨는 게 더 위험)
+
+**B 제안**: 백엔드 enum(`SAFE|WARNING|DANGER`, A의 확정 계약 + DB CHECK 제약 + rule_engine 로직에 이미
+박혀있음)을 바꾸는 대신, **프론트가 실제 연동하는 시점에 `SAFE→LOW, WARNING→MEDIUM, DANGER→HIGH`
+매핑 함수 하나를 데이터 수신 지점(API 응답 → `AnalysisResult` 변환 레이어)에 추가**하는 쪽을 권장한다.
+이유: 백엔드 쪽을 바꾸려면 A의 이미 테스트된 `rule_engine.py` 로직 + DB CHECK 제약 + "확정" 계약 문서를
+전부 건드려야 해서 블라스트 반경이 크고, 반대로 프론트 쪽은 매핑 함수 하나로 끝남. `conditionGrade`
+(A/B/C/D) 같은 다른 필드들도 실연동 시 비슷한 매핑이 필요할 수 있으니, 이 참에 "백엔드 원시값 → 프론트
+표시값" 변환을 한 군데(예: `analysis-service.ts`의 API 응답 파싱 지점)로 모아두는 걸 제안. B가 코드로
+구현할 부분은 없음(프론트 파일이라 연동 담당자 몫) — 여기 기록해서 실연동 시점에 놓치지 않게 하는 것까지가 B의 역할.
+
 ### 나머지 A 엔드포인트 (구현 완료)
 
 - `POST /api/v1/compare` — `item_ids` 2~3개 비교 + `recommendation` 한 줄
