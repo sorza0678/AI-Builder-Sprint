@@ -2,12 +2,11 @@
 
 DATABASE_URL 환경변수가 있으면 Postgres(psycopg2), 없으면 SQLite(로컬 개발/테스트) 사용.
 """
+import json
 import os
 import sqlite3
-import json
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
 
 import psycopg2
 import psycopg2.extras
@@ -116,7 +115,7 @@ def save_analysis(
         return analysis_id
 
 
-def get_analysis_by_id(analysis_id: int) -> Optional[dict]:
+def get_analysis_by_id(analysis_id: int) -> dict | None:
     """분석 결과 조회 (raw_analysis_json에서 full data 파싱)."""
     with get_db() as conn:
         row = _execute(
@@ -225,7 +224,7 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
 
 
 def upsert_transaction_status(
-    user_id: str, analysis_id: int, stage: str, decision: Optional[str]
+    user_id: str, analysis_id: int, stage: str, decision: str | None
 ) -> str:
     """거래 상태(stage+decision) upsert (매물당 1개, 이력 아님, 매 호출마다 두 필드 모두 덮어씀)
     → updated_at(ISO, 'Z' 접미사) 반환."""
@@ -251,7 +250,7 @@ def upsert_transaction_status(
 
 
 def get_transactions(
-    user_id: str, stage: Optional[str] = None, decision: Optional[str] = None
+    user_id: str, stage: str | None = None, decision: str | None = None
 ) -> list[dict]:
     """거래 상태 목록 (analysis_history와 조인, 최신 변경순). stage/decision 각각 생략 시 미필터."""
     query = """
@@ -384,7 +383,7 @@ def upsert_listing_details(
     return _iso_z(row["updated_at"])
 
 
-def get_listing_details(user_id: str, analysis_id: int) -> Optional[dict]:
+def get_listing_details(user_id: str, analysis_id: int) -> dict | None:
     """화면2 확인/수정된 매물 상세 조회 (없으면 None)."""
     with get_db() as conn:
         row = _execute(

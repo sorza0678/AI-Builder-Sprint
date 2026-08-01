@@ -437,9 +437,8 @@ def test_listing_get_scoped_to_user(client):
 # ---------- FK 회귀 방지 (기존 버그: PRAGMA foreign_keys 미적용) ----------
 
 def test_foreign_key_enforcement_rejects_unknown_analysis_id(client):
-    with pytest.raises(sqlite3.IntegrityError):
-        with db.get_db() as conn:
-            conn.execute(
-                "INSERT INTO comparison_items(user_id, analysis_id) VALUES ('ghost', 999999)"
-            )
-            conn.commit()
+    with pytest.raises(sqlite3.IntegrityError), db.get_db() as conn:
+        conn.execute(
+            "INSERT INTO comparison_items(user_id, analysis_id) VALUES ('ghost', 999999)"
+        )
+        conn.commit()
