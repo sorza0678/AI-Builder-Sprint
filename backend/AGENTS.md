@@ -74,12 +74,18 @@ product_status     { defects_found: list[str], missing_components: list[str] }
   데이터 마이그레이션은 없음. 함수명도 `upsert_transaction_status`로 리네임.
 - `POST/DELETE/GET /api/v1/comparison` — 비교 후보 목록 추가/제거/조회
 - `POST/DELETE/GET /api/v1/bookmark` — 찜 추가/제거/조회 (`bookmarks` 테이블은 A가 이미 생성, 엔드포인트는 B가 구현)
-- `GET /api/v1/mypage` — 상단 요약 `{analysis_count, bookmark_count, comparison_count, transaction_completed_count}` — 별도 집계 테이블 없이 기존/신규 테이블 COUNT 쿼리로 구성
+- `GET /api/v1/mypage?user_id=&recent_limit=` — 상단 요약 `{analysis_count, bookmark_count, comparison_count,
+  transaction_completed_count}` (별도 집계 테이블 없이 COUNT 쿼리) + `recent_analyses`(최근 분석 목록,
+  `recent_limit` 기본 5, `get_history()` 그대로 재사용 — 2026-08-02 추가). 프론트 마이페이지 화면의 "기록"
+  섹션은 이걸로 커버됨. "추천" 섹션과 `location` 필드는 의도적으로 뺌 — `location`은 백엔드 어디에도 실제
+  데이터가 없고(scraper가 판매자 위치를 수집하지 않음), "추천"은 `market_price.py`가 검색 결과를 가격만
+  남기고 버려서(`search_prices()`) 지어내지 않고는 채울 데이터가 없음. 둘 다 새 데이터 수집/설계가 필요한
+  별개 작업.
 - `POST /api/v1/listing` — 화면2(분석 확인) 확인/수정된 매물 상세(모델명·연식·사이즈·색상·사용기간·구성품·하자·상품명·가격) upsert, `analysis_id`당 1행 (B, 2026-08-02). `analysis_history`와 분리된 별도 테이블 — Document Parse 파이프라인(AI 최초 추정)과 겹치지 않음, "사람이 확정한 최종본"만 저장. **범위를 의도적으로 좁게 잡음**: GET/DELETE 없음(재확인은 POST 재호출로 덮어씀), `/history`·`/bookmark`·`/comparison`·`/mypage` 등 목록 화면에는 반영되지 않음(그 화면들은 여전히 `analysis_history` 원본만 보여줌) — 필요해지면 별도 논의.
 
 ⚠️ **프론트 연동 전제**: 현재 화면2(`analysis-confirm-sheet.tsx`)는 `/analyze` 호출 **이전**에 뜨고 100% mock 데이터(`getRecentListings()`)로 채워진다. `/listing`은 이미 존재하는 `item_id`(=`/analyze`가 만든 `analysis_history` PK)에 종속되므로, 실제로 연결하려면 프론트가 흐름을 "URL/이미지 제출 → `/analyze` 호출 → 그 결과로 화면2 표시 → 확인 시 `/listing` 저장"으로 재배치해야 한다 — 프론트팀 확인 필요.
 
-테스트 `backend/tests/test_service_endpoints.py` (26개, `/listing` 6개·`/transaction` 10개 포함) 참고.
+테스트 `backend/tests/test_service_endpoints.py` (27개, `/listing` 6개·`/transaction` 10개 포함) 참고.
 
 ## 공통 규칙
 

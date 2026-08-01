@@ -329,8 +329,8 @@ def upsert_listing_details(
     return row["updated_at"].replace(" ", "T") + "Z"
 
 
-def get_mypage_summary(user_id: str) -> dict:
-    """마이페이지 상단 요약 — 기존/신규 테이블 COUNT만으로 구성 (별도 집계 테이블 없음)."""
+def get_mypage_summary(user_id: str, recent_limit: int = 5) -> dict:
+    """마이페이지 상단 요약 — 기존/신규 테이블 COUNT + 최근 분석 목록(기존 get_history 재사용)."""
     with get_db() as conn:
         analysis_count = conn.execute(
             "SELECT COUNT(*) c FROM analysis_history WHERE user_id = ?", (user_id,)
@@ -345,9 +345,11 @@ def get_mypage_summary(user_id: str) -> dict:
             "SELECT COUNT(*) c FROM transaction_status WHERE user_id = ? AND stage = 'COMPLETED'",
             (user_id,),
         ).fetchone()["c"]
+    recent_analyses, _ = get_history(user_id, page=1, size=recent_limit)
     return {
         "analysis_count": analysis_count,
         "bookmark_count": bookmark_count,
         "comparison_count": comparison_count,
         "transaction_completed_count": transaction_completed_count,
+        "recent_analyses": recent_analyses,
     }

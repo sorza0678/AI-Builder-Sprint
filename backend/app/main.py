@@ -358,8 +358,11 @@ def upsert_listing(req: ListingRequest):
     tags=["mypage"],
     summary="마이페이지 상단 요약",
 )
-def mypage(user_id: str = Query(examples=["demo-user-1"])):
-    return success(db.get_mypage_summary(user_id))
+def mypage(
+    user_id: str = Query(examples=["demo-user-1"]),
+    recent_limit: int = Query(5, ge=1, le=20),
+):
+    return success(db.get_mypage_summary(user_id, recent_limit))
 
 
 @app.get("/health", tags=["meta"], summary="상태 확인")

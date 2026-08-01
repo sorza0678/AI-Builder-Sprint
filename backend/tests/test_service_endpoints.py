@@ -271,22 +271,31 @@ def test_mypage_counts_reflect_state(client):
 
     r = client.get("/api/v1/mypage", params={"user_id": "u1"})
     data = r.json()["data"]
-    assert data == {
-        "analysis_count": 2,
-        "bookmark_count": 1,
-        "comparison_count": 2,
-        "transaction_completed_count": 1,
-    }
+    assert data["analysis_count"] == 2
+    assert data["bookmark_count"] == 1
+    assert data["comparison_count"] == 2
+    assert data["transaction_completed_count"] == 1
+    assert [item["item_id"] for item in data["recent_analyses"]] == [b, a]  # 최신순
 
 
 def test_mypage_empty_user_returns_zeros(client):
     r = client.get("/api/v1/mypage", params={"user_id": "brand-new-user"})
-    assert r.json()["data"] == {
+    data = r.json()["data"]
+    assert data == {
         "analysis_count": 0,
         "bookmark_count": 0,
         "comparison_count": 0,
         "transaction_completed_count": 0,
+        "recent_analyses": [],
     }
+
+
+def test_mypage_recent_analyses_respects_limit_and_order(client):
+    ids = [_analyze(client) for _ in range(4)]
+
+    r = client.get("/api/v1/mypage", params={"user_id": "u1", "recent_limit": 2})
+    recent = r.json()["data"]["recent_analyses"]
+    assert [item["item_id"] for item in recent] == list(reversed(ids))[:2]
 
 
 # ---------- /listing ----------

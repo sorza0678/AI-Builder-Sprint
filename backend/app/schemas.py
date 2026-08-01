@@ -307,6 +307,7 @@ class MyPageData(BaseModel):
     bookmark_count: int
     comparison_count: int
     transaction_completed_count: int
+    recent_analyses: list[HistoryItem]
 
 
 class MyPageSuccess(BaseModel):
