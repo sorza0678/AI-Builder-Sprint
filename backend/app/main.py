@@ -43,9 +43,10 @@ from app.schemas import (
     ListingRequest,
     ListingSuccess,
     MyPageSuccess,
+    TransactionDecisionEnum,
     TransactionListSuccess,
     TransactionRequest,
-    TransactionStatusEnum,
+    TransactionStageEnum,
     TransactionSuccess,
 )
 
@@ -151,21 +152,6 @@ def analyze(req: AnalyzeRequest):
     return success({**data, "item_id": analysis_id})
 
 
-@app.get(
-    "/api/v1/history",
-    response_model=HistorySuccess,
-    tags=["history"],
-    summary="유저의 분석 히스토리 (최신순)",
-)
-def history(
-    user_id: str = Query(examples=["demo-user-1"]),
-    page: int = Query(1, ge=1),
-    size: int = Query(10, ge=1, le=50),
-):
-    items, total = db.get_history(user_id, page, size)
-    return success({"items": items, "page": page, "size": size, "total": total})
-
-
 @app.post(
     "/api/v1/compare",
     response_model=CompareSuccess,
@@ -216,6 +202,21 @@ def inquiry_script(req: InquiryScriptRequest):
     return success({"item_id": req.item_id, "script": mock_data.build_inquiry_script(analysis)})
 
 
+@app.get(
+    "/api/v1/history",
+    response_model=HistorySuccess,
+    tags=["history"],
+    summary="유저의 분석 히스토리 (최신순)",
+)
+def history(
+    user_id: str = Query(examples=["demo-user-1"]),
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=50),
+):
+    items, total = db.get_history(user_id, page, size)
+    return success({"items": items, "page": page, "size": size, "total": total})
+
+
 @app.post(
     "/api/v1/transaction",
     response_model=TransactionSuccess,
@@ -226,21 +227,24 @@ def inquiry_script(req: InquiryScriptRequest):
 def set_transaction(req: TransactionRequest):
     if not db.get_analysis_by_id(req.item_id):
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
-    updated_at = db.set_transaction_status(req.user_id, req.item_id, req.status)
-    return success({"item_id": req.item_id, "status": req.status, "updated_at": updated_at})
+    updated_at = db.upsert_transaction_status(req.user_id, req.item_id, req.stage, req.decision)
+    return success(
+        {"item_id": req.item_id, "stage": req.stage, "decision": req.decision, "updated_at": updated_at}
+    )
 
 
 @app.get(
     "/api/v1/transaction",
     response_model=TransactionListSuccess,
     tags=["transaction"],
-    summary="거래 상태 목록 조회 (status 생략 시 전체)",
+    summary="거래 상태 목록 조회 (stage/decision 생략 시 미필터)",
 )
 def list_transactions(
     user_id: str = Query(examples=["demo-user-1"]),
-    status: TransactionStatusEnum | None = Query(None),
+    stage: TransactionStageEnum | None = Query(None),
+    decision: TransactionDecisionEnum | None = Query(None),
 ):
-    items = db.get_transactions(user_id, status)
+    items = db.get_transactions(user_id, stage, decision)
     return success({"items": items, "total": len(items)})
 
 

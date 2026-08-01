@@ -25,55 +25,193 @@ def _analyze(client, url="mock-safe-test", user_id="u1") -> int:
     return r.json()["data"]["item_id"]
 
 
+# ---------- /history ----------
+
+def test_history_returns_items_newest_first(client):
+    first_id = _analyze(client)
+    second_id = _analyze(client)
+
+    r = client.get("/api/v1/history", params={"user_id": "u1"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    item_ids = [item["item_id"] for item in data["items"]]
+    assert item_ids == [second_id, first_id]
+
+    item = data["items"][0]
+    assert set(item.keys()) == {
+        "item_id", "source_url", "title", "price", "trust_score", "risk_level", "created_at",
+    }
+
+
+def test_history_pagination(client):
+    for _ in range(3):
+        _analyze(client)
+
+    r = client.get("/api/v1/history", params={"user_id": "u1", "page": 1, "size": 2})
+    data = r.json()["data"]
+    assert len(data["items"]) == 2
+    assert data["total"] == 3
+
+    r = client.get("/api/v1/history", params={"user_id": "u1", "page": 2, "size": 2})
+    data = r.json()["data"]
+    assert len(data["items"]) == 1
+    assert data["total"] == 3
+
+
+def test_history_scoped_to_user(client):
+    _analyze(client, user_id="u1")
+    _analyze(client, user_id="u2")
+
+    r = client.get("/api/v1/history", params={"user_id": "u1"})
+    data = r.json()["data"]
+    assert data["total"] == 1
+
+
+def test_history_empty_user_returns_empty_list(client):
+    r = client.get("/api/v1/history", params={"user_id": "brand-new-user"})
+    data = r.json()["data"]
+    assert data["items"] == []
+    assert data["total"] == 0
+
+
 # ---------- /transaction ----------
+
+def _transaction_row(item_id, user_id="u1"):
+    with db.get_db() as conn:
+        return conn.execute(
+            "SELECT stage, decision FROM transaction_status WHERE user_id = ? AND analysis_id = ?",
+            (user_id, item_id),
+        ).fetchone()
+
 
 def test_transaction_set_and_get(client):
     item_id = _analyze(client)
     r = client.post(
-        "/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "status": "PLANNED"}
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": item_id, "stage": "CONTACTING", "decision": "CONSIDERING"},
     )
     assert r.status_code == 200
-    assert r.json()["data"]["status"] == "PLANNED"
+    data = r.json()["data"]
+    assert data["stage"] == "CONTACTING"
+    assert data["decision"] == "CONSIDERING"
 
-    r = client.get("/api/v1/transaction", params={"user_id": "u1"})
-    items = r.json()["data"]["items"]
-    assert len(items) == 1 and items[0]["status"] == "PLANNED"
-
-
-def test_transaction_upsert_overwrites_not_duplicates(client):
-    item_id = _analyze(client)
-    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "status": "PLANNED"})
-    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "status": "COMPLETED"})
+    row = _transaction_row(item_id)
+    assert row["stage"] == "CONTACTING"
+    assert row["decision"] == "CONSIDERING"
 
     r = client.get("/api/v1/transaction", params={"user_id": "u1"})
     items = r.json()["data"]["items"]
     assert len(items) == 1
-    assert items[0]["status"] == "COMPLETED"
+    assert items[0]["stage"] == "CONTACTING"
+    assert items[0]["decision"] == "CONSIDERING"
 
 
-def test_transaction_filter_by_status(client):
+def test_transaction_upsert_overwrites_not_duplicates(client):
+    item_id = _analyze(client)
+    client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": item_id, "stage": "BEFORE_CONTACT", "decision": "CONSIDERING"},
+    )
+    r = client.post(
+        "/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "stage": "COMPLETED"}
+    )
+    assert r.json()["data"]["stage"] == "COMPLETED"
+    assert r.json()["data"]["decision"] is None  # decision 생략 → 리셋(전체 덮어쓰기 계약)
+
+    r = client.get("/api/v1/transaction", params={"user_id": "u1"})
+    items = r.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["stage"] == "COMPLETED"
+    assert items[0]["decision"] is None
+
+
+def test_transaction_decision_omitted_on_first_insert_is_null(client):
+    item_id = _analyze(client)
+    r = client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "stage": "SCHEDULED"})
+    assert r.json()["data"]["decision"] is None
+    assert _transaction_row(item_id)["decision"] is None
+
+
+def test_transaction_decision_persists_independently_of_stage(client):
+    item_id = _analyze(client)
+    client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": item_id, "stage": "SCHEDULED", "decision": "HOLD"},
+    )
+    row = _transaction_row(item_id)
+    assert row["stage"] == "SCHEDULED"
+    assert row["decision"] == "HOLD"
+
+
+def test_transaction_filter_by_stage(client):
     a = _analyze(client, url="mock-safe-a")
     b = _analyze(client, url="danger-b")
-    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": a, "status": "COMPLETED"})
-    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": b, "status": "PLANNED"})
+    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": a, "stage": "COMPLETED"})
+    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": b, "stage": "BEFORE_CONTACT"})
 
-    r = client.get("/api/v1/transaction", params={"user_id": "u1", "status": "COMPLETED"})
+    r = client.get("/api/v1/transaction", params={"user_id": "u1", "stage": "COMPLETED"})
+    items = r.json()["data"]["items"]
+    assert [i["item_id"] for i in items] == [a]
+
+
+def test_transaction_filter_by_decision(client):
+    a = _analyze(client, url="mock-safe-a")
+    b = _analyze(client, url="danger-b")
+    client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": a, "stage": "CONTACTING", "decision": "EXCLUDED"},
+    )
+    client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": b, "stage": "CONTACTING", "decision": "HOLD"},
+    )
+
+    r = client.get("/api/v1/transaction", params={"user_id": "u1", "decision": "EXCLUDED"})
+    items = r.json()["data"]["items"]
+    assert [i["item_id"] for i in items] == [a]
+
+
+def test_transaction_filter_by_stage_and_decision_combined(client):
+    a = _analyze(client, url="mock-safe-a")
+    b = _analyze(client, url="danger-b")
+    client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": a, "stage": "SCHEDULED", "decision": "CONSIDERING"},
+    )
+    client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": b, "stage": "SCHEDULED", "decision": "HOLD"},
+    )
+
+    r = client.get(
+        "/api/v1/transaction", params={"user_id": "u1", "stage": "SCHEDULED", "decision": "CONSIDERING"}
+    )
     items = r.json()["data"]["items"]
     assert [i["item_id"] for i in items] == [a]
 
 
 def test_transaction_unknown_item_returns_404(client):
     r = client.post(
-        "/api/v1/transaction", json={"user_id": "u1", "item_id": 9999, "status": "PLANNED"}
+        "/api/v1/transaction", json={"user_id": "u1", "item_id": 9999, "stage": "BEFORE_CONTACT"}
     )
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "ITEM_NOT_FOUND"
 
 
-def test_transaction_invalid_status_returns_422(client):
+def test_transaction_invalid_stage_returns_422(client):
     item_id = _analyze(client)
     r = client.post(
-        "/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "status": "NOT_A_STATUS"}
+        "/api/v1/transaction", json={"user_id": "u1", "item_id": item_id, "stage": "NOT_A_STAGE"}
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_transaction_invalid_decision_returns_422(client):
+    item_id = _analyze(client)
+    r = client.post(
+        "/api/v1/transaction",
+        json={"user_id": "u1", "item_id": item_id, "stage": "CONTACTING", "decision": "NOT_A_DECISION"},
     )
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "VALIDATION_ERROR"
@@ -129,7 +267,7 @@ def test_mypage_counts_reflect_state(client):
     client.post("/api/v1/bookmark", json={"user_id": "u1", "item_id": a})
     client.post("/api/v1/comparison", json={"user_id": "u1", "item_id": a})
     client.post("/api/v1/comparison", json={"user_id": "u1", "item_id": b})
-    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": a, "status": "COMPLETED"})
+    client.post("/api/v1/transaction", json={"user_id": "u1", "item_id": a, "stage": "COMPLETED"})
 
     r = client.get("/api/v1/mypage", params={"user_id": "u1"})
     data = r.json()["data"]
