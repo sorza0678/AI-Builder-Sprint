@@ -11,7 +11,7 @@ export interface AnalysisHistoryItem {
   timeLabel: string;
   title: string;
   price: string;
-  thumbnail: 'macbook' | 'placeholder';
+  thumbnail: 'macbook' | 'placeholder' | { uri: string };
 }
 
 const assets = {
@@ -59,6 +59,9 @@ export function AnalysisHistoryRow({ item, destination = 'analysis' }: AnalysisH
 }
 
 function AnalysisThumbnail({ sourceType }: { sourceType: AnalysisHistoryItem['thumbnail'] }) {
+  if (typeof sourceType === 'object') {
+    return <Image contentFit="cover" source={sourceType} style={styles.thumbnail} />;
+  }
   if (sourceType === 'macbook') {
     return <Image contentFit="cover" source={assets.macbook} style={styles.thumbnail} />;
   }

@@ -248,7 +248,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     lineHeight: 26,
     letterSpacing: -0.3,
-    textDecorationLine: 'underline',
   },
   myPageLink: {
     flexDirection: 'row',

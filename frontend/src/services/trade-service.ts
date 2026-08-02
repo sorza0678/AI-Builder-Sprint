@@ -1,7 +1,6 @@
 import { apiRequest, query } from './api-client';
 import type { ApiTransactionDecision, ApiTransactionStage, TransactionItem } from './api-types';
 import { getOrCreateGuestId } from '@/src/storage/guest-id-storage';
-import { mergeCachedListingValues } from '@/src/repositories/analysis-result-cache-repository';
 
 export async function getChecklist(item_id: number) {
   const user_id = await getOrCreateGuestId();
@@ -17,6 +16,5 @@ export async function setTransaction(item_id: number, stage: ApiTransactionStage
 }
 export async function getTransactions(stage?: ApiTransactionStage, decision?: ApiTransactionDecision) {
   const user_id = await getOrCreateGuestId();
-  const data = await apiRequest<{ items: TransactionItem[]; total: number }>(`/api/v1/transaction?${query({ user_id, stage, decision })}`);
-  return { ...data, items: await mergeCachedListingValues(data.items) };
+  return apiRequest<{ items: TransactionItem[]; total: number }>(`/api/v1/transaction?${query({ user_id, stage, decision })}`);
 }

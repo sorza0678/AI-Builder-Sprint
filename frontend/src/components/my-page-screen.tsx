@@ -1,11 +1,11 @@
 import { router } from 'expo-router';
 import { Image, ImageSource } from 'expo-image';
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
 import { getMyPageSummary } from '@/src/services/mypage-service';
-import { getHistory } from '@/src/services/history-service';
 import type { HistoryItem, MyPageData } from '@/src/services/api-types';
 import { getAuthSession, signOut } from '@/src/storage/auth-session-storage';
 
@@ -108,21 +108,21 @@ export function MyPageScreen() {
   const [summary, setSummary] = useState<MyPageData>();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [accountId, setAccountId] = useState('');
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     void getAuthSession().then((session) => {
       if (!session) {
         router.replace('/login');
         return;
       }
       setAccountId(session.accountId);
-      void Promise.all([getMyPageSummary(), getHistory(1, 5)])
-        .then(([nextSummary, nextHistory]) => {
+      void getMyPageSummary()
+        .then((nextSummary) => {
           setSummary(nextSummary);
-          setHistory(nextHistory.items);
+          setHistory(nextSummary.recent_analyses);
         })
         .catch(() => undefined);
     });
-  }, []);
+  }, []));
 
   const accountItems: MenuItem[] = [
     { label: '설정', icon: require('@/assets/images/sidebar/settings.svg') },

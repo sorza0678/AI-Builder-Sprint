@@ -22,7 +22,7 @@ import {
   TradeQuestion,
 } from '@/src/mocks/trade-preparation';
 import { getAnalysisResult } from '@/src/services/analysis-service';
-import { getChecklist, getInquiryScript, setTransaction } from '@/src/services/trade-service';
+import { getChecklist, getInquiryScript, getTransactions, setTransaction } from '@/src/services/trade-service';
 import type { ApiTransactionDecision, ApiTransactionStage } from '@/src/services/api-types';
 import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
 import { AnalysisResult } from '@/src/types/marketplace';
@@ -573,9 +573,27 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
   );
 }
 
-function ProgressStepContent({ itemId, title }: { itemId: number; title: string }) {
-  const [progressStep, setProgressStep] = useState<NullableTradeProgressStep>(null);
-  const [decision, setDecision] = useState<NullableTradeDecision>(null);
+function ProgressStepContent({
+  decision: apiDecision,
+  itemId,
+  onChange,
+  stage,
+  title,
+}: {
+  decision: ApiTransactionDecision | null;
+  itemId: number;
+  onChange: (stage: ApiTransactionStage, decision: ApiTransactionDecision | null) => void;
+  stage: ApiTransactionStage | null;
+  title: string;
+}) {
+  const stageFromApi: Record<ApiTransactionStage, TradeProgressStep> = {
+    BEFORE_CONTACT: 'beforeContact', CONTACTING: 'contacting', SCHEDULED: 'scheduled', COMPLETED: 'completed',
+  };
+  const decisionFromApi: Record<ApiTransactionDecision, TradeDecision> = {
+    CONSIDERING: 'considering', HOLD: 'hold', EXCLUDED: 'excluded',
+  };
+  const progressStep: NullableTradeProgressStep = stage ? stageFromApi[stage] : null;
+  const decision: NullableTradeDecision = apiDecision ? decisionFromApi[apiDecision] : null;
   const activeIndex = progressStep
     ? PROGRESS_STEPS.findIndex((step) => step.value === progressStep)
     : -1;
@@ -617,7 +635,6 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
                   accessibilityState={{ selected: active }}
                   key={step.value}
                   onPress={() => {
-                    setProgressStep(step.value);
                     const stageMap: Record<TradeProgressStep, ApiTransactionStage> = {
                       beforeContact: 'BEFORE_CONTACT', contacting: 'CONTACTING',
                       scheduled: 'SCHEDULED', completed: 'COMPLETED',
@@ -625,9 +642,12 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
                     const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
                       considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
                     };
+                    const nextStage = stageMap[step.value];
+                    const nextDecision = decision ? decisionMap[decision] : null;
+                    onChange(nextStage, nextDecision);
                     void Promise.all([
                       markTradeSelection(itemId),
-                      setTransaction(itemId, stageMap[step.value], decision ? decisionMap[decision] : null),
+                      setTransaction(itemId, nextStage, nextDecision),
                     ]);
                   }}
                   style={({ pressed }) => [styles.tradeStepperItem, pressed && styles.pressed]}>
@@ -675,7 +695,6 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
                 accessibilityState={{ selected }}
                 key={item.value}
                 onPress={() => {
-                  setDecision(item.value);
                   if (progressStep) {
                     const stageMap: Record<TradeProgressStep, ApiTransactionStage> = {
                       beforeContact: 'BEFORE_CONTACT', contacting: 'CONTACTING',
@@ -684,9 +703,12 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
                     const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
                       considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
                     };
+                    const nextStage = stageMap[progressStep];
+                    const nextDecision = decisionMap[item.value];
+                    onChange(nextStage, nextDecision);
                     void Promise.all([
                       markTradeSelection(itemId),
-                      setTransaction(itemId, stageMap[progressStep], decisionMap[item.value]),
+                      setTransaction(itemId, nextStage, nextDecision),
                     ]);
                   }
                 }}
@@ -723,6 +745,8 @@ export default function TradePreparationScreen() {
   const [favorite, setFavorite] = useState(false);
   const [serverMessage, setServerMessage] = useState('');
   const [serverChecklist, setServerChecklist] = useState<TradeChecklistItem[]>([]);
+  const [transactionStage, setTransactionStage] = useState<ApiTransactionStage | null>(null);
+  const [transactionDecision, setTransactionDecision] = useState<ApiTransactionDecision | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -736,8 +760,9 @@ export default function TradePreparationScreen() {
       getInquiryScript(Number(id)),
       getChecklist(Number(id)),
       getBookmarks(),
+      getTransactions(),
     ])
-      .then(([analysisResult, inquiryResult, checklistResult, bookmarkResult]) => {
+      .then(([analysisResult, inquiryResult, checklistResult, bookmarkResult, transactionResult]) => {
         if (active) {
           if (analysisResult.status === 'fulfilled') setResult(analysisResult.value);
           if (inquiryResult.status === 'fulfilled') setServerMessage(inquiryResult.value.script);
@@ -751,6 +776,11 @@ export default function TradePreparationScreen() {
           }
           if (bookmarkResult.status === 'fulfilled') {
             setFavorite(bookmarkResult.value.items.some((item) => item.item_id === Number(id)));
+          }
+          if (transactionResult.status === 'fulfilled') {
+            const transaction = transactionResult.value.items.find((item) => item.item_id === Number(id));
+            setTransactionStage(transaction?.stage ?? null);
+            setTransactionDecision(transaction?.decision ?? null);
           }
         }
       })
@@ -979,7 +1009,16 @@ export default function TradePreparationScreen() {
         ) : activeStep === 'price' ? (
           <PriceStepContent result={result} onCopyMessage={copyPriceMessage} />
         ) : (
-          <ProgressStepContent itemId={Number(result.id)} title={result.listing.title} />
+          <ProgressStepContent
+            decision={transactionDecision}
+            itemId={Number(result.id)}
+            onChange={(stage, decision) => {
+              setTransactionStage(stage);
+              setTransactionDecision(decision);
+            }}
+            stage={transactionStage}
+            title={result.listing.title}
+          />
         )}
       </ScrollView>
     </SafeAreaView>

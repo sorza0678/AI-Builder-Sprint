@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Href, router } from 'expo-router';
 import { Image } from 'expo-image';
 import {
@@ -100,9 +101,7 @@ export default function TradeRecordsScreen() {
     });
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(load);
 
   const items = useMemo(() => {
     const storedItems = records.map(mapTradeRecord);

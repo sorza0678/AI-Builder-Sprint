@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,13 +18,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AnalysisConfirmSheet } from '@/src/components/analysis-confirm-sheet';
 import { Text } from '@/src/components/pretendard-text';
 import { colors } from '@/src/constants/theme';
-import { createAnalysis } from '@/src/services/analysis-service';
+import { createAnalysis, deleteAnalysis } from '@/src/services/analysis-service';
 import { ApiError } from '@/src/services/api-client';
 import { saveListingDetails } from '@/src/services/listing-service';
 import { cacheAnalysisResult } from '@/src/repositories/analysis-result-cache-repository';
 import { AnalysisDraft, SelectedImage } from '@/src/types/analysis-input';
 import { AnalysisResult, Listing } from '@/src/types/marketplace';
-import { getUrlError, normalizeUrl } from '@/src/utils/url-validation';
+import { extractFirstHttpUrl, getUrlError, normalizeUrl } from '@/src/utils/url-validation';
 
 export default function AnalysisInputScreen() {
   const params = useLocalSearchParams<{
@@ -106,6 +107,7 @@ export default function AnalysisInputScreen() {
   };
 
   const confirmInput = (): void => {
+    Keyboard.dismiss();
     const normalizedUrl = normalizeUrl(url);
     const urlError = normalizedUrl ? getUrlError(normalizedUrl) : null;
     setUrl(normalizedUrl);
@@ -191,6 +193,29 @@ export default function AnalysisInputScreen() {
     }
   };
 
+  const discardPendingAnalysis = async (): Promise<void> => {
+    if (isSubmitting) return;
+    const result = pendingResult;
+    if (!result) {
+      setSheetVisible(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await deleteAnalysis(result.id);
+      setPendingResult((current) => current?.id === result.id ? undefined : current);
+      setPendingInput(null);
+      setSheetVisible(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } catch {
+      Alert.alert('기록 정리 실패', '임시 분석 기록을 삭제하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
@@ -238,7 +263,7 @@ export default function AnalysisInputScreen() {
             keyboardType="url"
             disableFullscreenUI
             onChangeText={(value) => {
-              setUrl(value);
+              setUrl(extractFirstHttpUrl(value) ?? value);
               setPendingResult(undefined);
               setInputError(null);
             }}
@@ -325,10 +350,7 @@ export default function AnalysisInputScreen() {
           visible={sheetVisible}
           listing={draftListing}
           isAnalyzing={isSubmitting}
-          onClose={() => {
-            setSheetVisible(false);
-            requestAnimationFrame(() => inputRef.current?.focus());
-          }}
+          onClose={() => void discardPendingAnalysis()}
           onAnalyze={submitAnalysis}
         />
       )}

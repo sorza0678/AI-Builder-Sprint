@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import type { ApiEnvelope } from './api-types';
+import { getAuthSession } from '@/src/storage/auth-session-storage';
 
 const fallbackBaseUrl = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000';
 export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL || fallbackBaseUrl).replace(/\/$/, '');
@@ -17,10 +18,11 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
+    const session = await getAuthSession();
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       signal: controller.signal,
-      headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers },
+      headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(session ? { Authorization: `Bearer ${session.token}` } : {}), ...init?.headers },
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {

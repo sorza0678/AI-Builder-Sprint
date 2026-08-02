@@ -12,16 +12,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text } from '@/src/components/pretendard-text';
-import { compareItems, getComparisonItems } from '@/src/services/comparison-service';
+import { deleteComparisonHistory, getComparisonHistory } from '@/src/services/comparison-service';
+import { getAnalysisResult } from '@/src/services/analysis-service';
+import { SwipeToDelete } from '@/src/components/swipe-to-delete';
 
 interface ComparisonHistorySnapshot {
   localId: string;
   createdAt: string;
   recommendation: string;
-  itemSnapshots: { serverItemId: number; title: string; price: number }[];
+  itemSnapshots: { serverItemId: number; title: string; price: number; thumbnailUri: string | null }[];
 }
 
-type ComparisonThumbnailKind = 'macbook' | 'placeholder';
+type ComparisonThumbnailKind = 'macbook' | 'placeholder' | { uri: string };
 
 interface ComparisonProductItem {
   id: string;
@@ -71,14 +73,14 @@ function getComparisonTitle(item: ComparisonHistorySnapshot): string {
 function mapComparisonHistory(item: ComparisonHistorySnapshot): ComparisonHistoryItem {
   return {
     id: item.localId,
-    href: '/compare',
+    href: `/compare?historyId=${item.localId}` as Href,
     title: getComparisonTitle(item),
     recommendation: item.recommendation,
     products: item.itemSnapshots.slice(0, 3).map((snapshot) => ({
       id: `${item.localId}-${snapshot.serverItemId}`,
       title: snapshot.title,
       price: `${snapshot.price.toLocaleString('ko-KR')}원`,
-      thumbnail: 'placeholder',
+      thumbnail: snapshot.thumbnailUri ? { uri: snapshot.thumbnailUri } : 'placeholder',
     })),
   };
 }
@@ -140,24 +142,25 @@ export default function ComparisonHistoryScreen() {
   const [isListScrolled, setIsListScrolled] = useState(false);
 
   const load = useCallback(() => {
-    getComparisonItems().then(async ({ items }) => {
-      if (!items.length) {
-        setHistoryItems([]);
-        return;
-      }
-      const recommendation = items.length >= 2
-        ? (await compareItems(items.slice(0, 3).map((item) => item.item_id))).recommendation
-        : '비교할 상품을 2개 이상 추가해 주세요';
-      setHistoryItems([{
-        localId: 'current-comparison',
-        createdAt: new Date().toISOString(),
-        recommendation,
-        itemSnapshots: items.slice(0, 3).map((item) => ({
-          serverItemId: item.item_id,
-          title: item.title,
-          price: item.price,
+    getComparisonHistory().then(async ({ items }) => {
+      const itemIds = [...new Set(items.flatMap((item) => item.item_ids))];
+      const thumbnailEntries = await Promise.all(itemIds.map(async (itemId) => {
+        const result = await getAnalysisResult(String(itemId)).catch(() => undefined);
+        return [itemId, result?.listing.imageUrl ?? null] as const;
+      }));
+      const thumbnailByItemId = new Map(thumbnailEntries);
+
+      setHistoryItems(items.map((item) => ({
+        localId: String(item.comparison_id),
+        createdAt: item.created_at,
+        recommendation: item.recommendation,
+        itemSnapshots: item.items.map((snapshot) => ({
+          serverItemId: snapshot.item_id,
+          title: snapshot.title,
+          price: snapshot.price,
+          thumbnailUri: thumbnailByItemId.get(snapshot.item_id) ?? null,
         })),
-      }]);
+      })));
     });
   }, []);
 
@@ -205,12 +208,6 @@ export default function ComparisonHistoryScreen() {
         </View>
       </View>
 
-      <View style={styles.supportNotice}>
-        <Text style={styles.supportNoticeText}>
-          과거 비교 기록 저장은 지원 예정인 기능입니다. 현재 비교 중인 상품만 표시됩니다.
-        </Text>
-      </View>
-
       <SectionList
         contentContainerStyle={styles.listContent}
         keyExtractor={(item) => item.id}
@@ -225,7 +222,16 @@ export default function ComparisonHistoryScreen() {
             current === nextIsScrolled ? current : nextIsScrolled,
           );
         }}
-        renderItem={({ item }) => <ComparisonHistoryCard item={item} />}
+        renderItem={({ item }) => (
+          <SwipeToDelete
+            accessibilityLabel={`${item.title} 비교 기록 삭제`}
+            onDelete={async () => {
+              await deleteComparisonHistory(Number(item.id));
+              setHistoryItems((current) => current.filter((historyItem) => historyItem.localId !== item.id));
+            }}>
+            <ComparisonHistoryCard item={item} />
+          </SwipeToDelete>
+        )}
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>{section.title}</Text>
@@ -300,6 +306,9 @@ function ComparisonProductCard({
 }
 
 function ComparisonThumbnail({ thumbnail }: { thumbnail: ComparisonThumbnailKind }) {
+  if (typeof thumbnail === 'object') {
+    return <Image contentFit="cover" source={thumbnail} style={styles.thumbnail} />;
+  }
   if (thumbnail === 'placeholder') {
     return (
       <View style={styles.placeholderThumbnail}>
@@ -392,21 +401,6 @@ const styles = StyleSheet.create({
   searchIcon: {
     height: 15,
     width: 15,
-  },
-  supportNotice: {
-    marginHorizontal: 20,
-    marginBottom: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: '#F4F6FA',
-  },
-  supportNoticeText: {
-    color: '#838C97',
-    fontSize: 12,
-    fontWeight: '400',
-    lineHeight: 17,
-    letterSpacing: -0.3,
   },
   list: {
     flex: 1,

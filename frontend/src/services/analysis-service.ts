@@ -1,8 +1,8 @@
 import type { AnalysisResult, Listing, PriceGrade, RiskLevel } from '@/src/types/marketplace';
-import type { AnalyzeData, ApiRiskLevel } from './api-types';
-import { apiRequest } from './api-client';
+import type { AnalysisDetailData, AnalyzeData, ApiRiskLevel } from './api-types';
+import { apiRequest, query } from './api-client';
 import { getOrCreateGuestId } from '@/src/storage/guest-id-storage';
-import { cacheAnalysisResult, getCachedAnalysisResult } from '@/src/repositories/analysis-result-cache-repository';
+import { cacheAnalysisResult, getCachedAnalysisResult, removeCachedAnalysisResult } from '@/src/repositories/analysis-result-cache-repository';
 
 const riskMap: Record<ApiRiskLevel, RiskLevel> = { SAFE: 'LOW', WARNING: 'MEDIUM', DANGER: 'HIGH' };
 
@@ -14,20 +14,44 @@ function getPriceGrade(price: number, average: number): PriceGrade {
 }
 
 export function mapAnalyzeData(data: AnalyzeData, sourceUrl = '', imageUrl: string | null = null): AnalysisResult {
+  const details = 'listing_details' in data ? (data as AnalysisDetailData).listing_details : null;
+  const marketAverage = data.market_price?.average ?? data.market_price_avg;
   const listing: Listing = {
-    id: String(data.item_id), title: data.title, platform: '플랫폼 표시 미지원', imageUrl,
-    sourceUrl, price: data.price, modelName: '', year: '',
-    sizeOrCapacity: '', color: '', usagePeriod: '', components: [],
-    defects: data.product_status.defects_found, sellerDescription: '', saved: false,
+    id: String(data.item_id),
+    title: details?.title ?? data.title,
+    platform: data.platform ?? '플랫폼 정보 없음',
+    imageUrl: data.thumbnail_url ?? imageUrl,
+    sourceUrl: data.source_url ?? sourceUrl,
+    price: details?.price ?? data.price,
+    modelName: details?.model_name ?? '',
+    year: details?.year ?? '',
+    sizeOrCapacity: details?.size_or_capacity ?? '',
+    color: details?.color ?? '',
+    usagePeriod: details?.usage_period ?? '',
+    components: details?.components ?? [],
+    defects: details?.defects ?? data.product_status.defects_found,
+    sellerDescription: '',
+    saved: false,
   };
   return {
-    id: String(data.item_id), listing,
-    marketPrice: { min: data.market_price_avg, average: data.market_price_avg, max: data.market_price_avg },
-    priceGrade: getPriceGrade(data.price, data.market_price_avg), conditionGrade: 'D',
-    riskLevel: riskMap[data.risk_level], warningSignals: data.scam_warnings,
+    id: String(data.item_id),
+    listing,
+    marketPrice: {
+      min: data.market_price?.min ?? marketAverage,
+      average: marketAverage,
+      max: data.market_price?.max ?? marketAverage,
+    },
+    priceGrade: getPriceGrade(listing.price, marketAverage),
+    conditionGrade: 'D',
+    riskLevel: riskMap[data.risk_level],
+    warningSignals: data.scam_warnings,
     missingInformation: data.product_status.missing_components,
-    tradeChecklist: [], sellerQuestions: [], analyzedAt: new Date().toISOString(),
-    trustScore: data.trust_score, marketPriceRangeSupported: false, conditionGradeSupported: false,
+    tradeChecklist: [],
+    sellerQuestions: [],
+    analyzedAt: 'created_at' in data ? (data as AnalysisDetailData).created_at : new Date().toISOString(),
+    trustScore: data.trust_score,
+    marketPriceRangeSupported: Boolean(data.market_price),
+    conditionGradeSupported: false,
   };
 }
 
@@ -42,5 +66,28 @@ export async function createAnalysis(listing: Listing): Promise<AnalysisResult> 
 }
 
 export async function getAnalysisResult(id: string): Promise<AnalysisResult | undefined> {
-  return getCachedAnalysisResult(id);
+  const user_id = await getOrCreateGuestId();
+  try {
+    const data = await apiRequest<AnalysisDetailData>(`/api/v1/analysis/${encodeURIComponent(id)}?${query({ user_id })}`);
+    const result = mapAnalyzeData(data);
+    await cacheAnalysisResult(result);
+    return result;
+  } catch (error) {
+    const cached = await getCachedAnalysisResult(id);
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+export async function getAnalysisDetailData(id: number): Promise<AnalysisDetailData> {
+  const user_id = await getOrCreateGuestId();
+  return apiRequest<AnalysisDetailData>(`/api/v1/analysis/${id}?${query({ user_id })}`);
+}
+
+export async function deleteAnalysis(id: string): Promise<void> {
+  const user_id = await getOrCreateGuestId();
+  await apiRequest<{ item_id: number; deleted: boolean }>(`/api/v1/analysis/${encodeURIComponent(id)}?${query({ user_id })}`, {
+    method: 'DELETE',
+  });
+  await removeCachedAnalysisResult(id);
 }

@@ -17,14 +17,15 @@ import {
   ComparisonItem,
   ComparisonPriority,
 } from '@/src/mocks/comparison';
-import { addComparisonItem, compareItems, getComparisonItems, removeComparisonItem } from '@/src/services/comparison-service';
+import { addComparisonItem, compareItems, getComparisonHistoryById, getComparisonItems, removeComparisonItem } from '@/src/services/comparison-service';
 import { getHistory } from '@/src/services/history-service';
 import type { AnalyzeData, HistoryItem } from '@/src/services/api-types';
+import { getAnalysisDetailData } from '@/src/services/analysis-service';
 
 const PRIORITIES: ComparisonPriority[] = ['price', 'safety', 'condition', 'components'];
 
 export default function CompareScreen() {
-  const { reset } = useLocalSearchParams<{ reset?: string }>();
+  const { historyId, reset } = useLocalSearchParams<{ historyId?: string; reset?: string }>();
   const [priority, setPriority] = useState<ComparisonPriority>('price');
   const [apiItems, setApiItems] = useState<AnalyzeData[]>([]);
   const [recentItems, setRecentItems] = useState<HistoryItem[]>([]);
@@ -35,6 +36,40 @@ export default function CompareScreen() {
   const [expandedRiskId, setExpandedRiskId] = useState<string>();
 
   const loadComparison = useCallback(async () => {
+    if (historyId) {
+      const [historyRecord, history] = await Promise.all([
+        getComparisonHistoryById(Number(historyId)),
+        getHistory(1, 50),
+      ]);
+      const detailEntries = await Promise.all(historyRecord.items.map(async (snapshot) => {
+        const detail = await getAnalysisDetailData(snapshot.item_id).catch(() => undefined);
+        return [snapshot.item_id, detail] as const;
+      }));
+      const detailByItemId = new Map(detailEntries);
+      const snapshotItems: AnalyzeData[] = historyRecord.items.map((snapshot) => {
+        const detail = detailByItemId.get(snapshot.item_id);
+        return {
+          item_id: snapshot.item_id,
+          title: snapshot.title,
+          price: snapshot.price,
+          market_price_avg: detail?.market_price_avg ?? 0,
+          trust_score: snapshot.trust_score,
+          risk_level: snapshot.risk_level,
+          scam_warnings: detail?.scam_warnings ?? [],
+          product_status: detail?.product_status ?? { defects_found: [], missing_components: [] },
+          market_price: detail?.market_price,
+          platform: detail?.platform,
+          thumbnail_url: detail?.thumbnail_url,
+          location: detail?.location,
+          source_url: detail?.source_url,
+        };
+      });
+      setApiItems(snapshotItems);
+      setRecentItems(history.items);
+      setVisibleIds(snapshotItems.map((item) => String(item.item_id)));
+      setRecommendation(historyRecord.recommendation);
+      return;
+    }
     const [{ items }, history] = await Promise.all([
       getComparisonItems(),
       getHistory(1, 50),
@@ -48,7 +83,7 @@ export default function CompareScreen() {
       } else {
         setRecommendation('');
       }
-  }, []);
+  }, [historyId]);
 
   useEffect(() => {
     const initialize = async (): Promise<void> => {
@@ -108,7 +143,7 @@ export default function CompareScreen() {
   const lowestPriceItem = [...apiItems].sort((a, b) => a.price - b.price)[0];
   const comparisonGuides = [
     safestItem && { id: 'safe', description: '가장 안전하게 거래하고 싶다면', product: safestItem.title, score: safestItem.trust_score, icon: require('@/assets/images/compare/guide-safe.svg') },
-    lowestPriceItem && { id: 'price', description: '판매가가 가장 낮은 상품', product: lowestPriceItem.title, score: null, icon: require('@/assets/images/compare/guide-inspect.svg') },
+    lowestPriceItem && { id: 'price', description: '판매가가 가장 낮은 상품', product: lowestPriceItem.title, score: lowestPriceItem.trust_score, icon: require('@/assets/images/compare/guide-inspect.svg') },
     safestItem && { id: 'trust', description: '현재 신뢰 점수가 가장 높은 상품', product: safestItem.title, score: safestItem.trust_score, icon: require('@/assets/images/compare/guide-best.svg') },
   ].filter((guide): guide is NonNullable<typeof guide> => Boolean(guide));
 
@@ -220,7 +255,7 @@ export default function CompareScreen() {
                     </View>
                   )}
                 </View>
-                <Pressable
+                {!historyId && <Pressable
                   accessibilityLabel={`${item.name} 비교에서 제거`}
                   accessibilityRole="button"
                   onPress={() => removeItem(item.id)}
@@ -230,10 +265,10 @@ export default function CompareScreen() {
                     source={require('@/assets/images/compare/close.svg')}
                     style={styles.closeIcon}
                   />
-                </Pressable>
+                </Pressable>}
               </View>
             ))}
-            {visibleItems.length < 3 && (
+            {!historyId && visibleItems.length < 3 && (
               <Pressable
                 accessibilityLabel="비교할 상품 추가"
                 accessibilityRole="button"
@@ -688,7 +723,7 @@ const styles = StyleSheet.create({
   riskPopup: {
     position: 'absolute',
     top: 52,
-    left: -31,
+    left: 0,
     zIndex: 30,
     width: 164,
     paddingHorizontal: 12,

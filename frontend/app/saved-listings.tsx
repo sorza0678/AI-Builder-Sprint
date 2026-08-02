@@ -38,12 +38,23 @@ function mapSavedListing(item: AnalyzeData): SavedListingItem {
   return {
     id: String(item.item_id),
     analysisHref: `/analysis/${item.item_id}` as Href,
-    location: '지역 표시 미지원',
+    location: item.location ?? item.platform ?? '지역 정보 없음',
     title: item.title,
     price: `${item.price.toLocaleString('ko-KR')}원`,
-    timeLabel: '시각 표시 미지원',
-    thumbnail: 'placeholder',
+    timeLabel: formatTimeLabel(item.bookmarked_at),
+    thumbnail: item.thumbnail_url ? { uri: item.thumbnail_url } : 'placeholder',
   };
+}
+
+function formatTimeLabel(value?: string): string {
+  if (!value) return '시각 정보 없음';
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return '시각 정보 없음';
+  const diffMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (diffMinutes < 1) return '방금 전';
+  if (diffMinutes < 60) return `${diffMinutes}분 전`;
+  if (diffMinutes < 1440) return `${Math.floor(diffMinutes / 60)}시간 전`;
+  return `${Math.floor(diffMinutes / 1440)}일 전`;
 }
 
 function filterSavedListings(items: SavedListingItem[], query: string): SavedListingItem[] {
