@@ -18,7 +18,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 - DB: 기본은 SQLite(`backend/resale_guard.db`, 자동 생성) — `.env`에 `DATABASE_URL`을 채우면 Postgres(Supabase)로
   자동 전환됨(코드 무변경). 자세한 건 아래 "SQLite ↔ Postgres 이중 백엔드" 참고, `.env.example` 참고
 - Upstage 연동(선택): `cp .env.example .env` 후 `UPSTAGE_API_KEY` 입력 — 없어도 Rule Engine만으로 전부 동작
-- 테스트: `.venv/bin/python -m pytest tests/ -q` (58개, A/B 전부 포함)
+- 테스트: `.venv/bin/python -m pytest tests/ -q` (130개, A/B 전부 포함)
 
 ## 공통 응답 형식 (팀 컨벤션)
 
@@ -259,20 +259,28 @@ A가 임시 제공하던 것을 B로 이관 완료(2026-08-02, 순수 코드 이
 - [x] `/mypage`: `recent_analyses` 번들 추가 (2026-08-02)
 - [x] `/listing` GET 추가 — 화면2 재확인 시나리오 대비 (2026-08-02)
 - [x] SQLite ↔ Postgres(Supabase) 이중 백엔드 지원 — 코드 준비 완료 (2026-08-02, 아래 참고)
-- [x] `risk_level` enum이 프론트와 다른 문제 확인·문서화, 프론트 매핑 제안 (2026-08-02)
-- [ ] 실제 Supabase 프로젝트 생성 및 연결 검증 — `init_db()`의 Postgres 다중 SQL문 실행이 실제
-      네트워크에서 되는지 아직 미확인 (코드는 준비됨, 계정만 만들면 됨)
+- [x] `risk_level` enum이 프론트와 다른 문제 확인·문서화, 프론트 매핑 제안 (2026-08-02) — 이후
+      프론트 `analysis-service.ts`에 실제 매핑 함수로 반영됨 확인
+- [x] 실제 Supabase 프로젝트로 연결 검증 완료 (2026-08-03) — `init_db()`의 Postgres 다중 SQL문
+      실행, signup/analyze/bookmark/history/mypage/soft-delete까지 실제 인스턴스에서 정상 동작
+      확인. ⚠️ Direct connection(5432)은 IPv6 전용이라 IPv6 미지원 네트워크에서 연결 실패함 —
+      **Pooler(6543, `?pgbouncer=true`)를 반드시 사용할 것** (아래 "SQLite ↔ Postgres" 절 참고).
+      비밀번호에 URL 특수문자(`[`,`]`,`@`,`#` 등)가 있으면 연결 문자열 파싱이 깨지니 영문/숫자
+      조합 권장.
 
-남은 것(B): 위 Supabase 연결 검증, 배포.
+남은 것(B): 실제 배포(Render 등), `AUTH_SECRET`/`AUTH_REQUIRED=1`/CORS 등 실서비스 전 보안 설정
+(상세는 `backend/AGENTS.md` "보안 점검 결과" 절의 잔여 리스크 참고).
 
-## DB 테이블 (6개)
+## DB 테이블 (8개)
 
-- `users(id TEXT PK, created_at)` — user_id는 프론트가 보내는 문자열 (인증 없음)
-- `analysis_history(id, user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json, created_at)` — 분석결과 통째로 JSON 저장 (A 생성)
+- `users(id TEXT PK, created_at, password_hash, nickname, migrated_to)` — 인증(P0-3)·guest 이전(P0-4)용 컬럼 추가됨
+- `analysis_history(id, user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json, created_at, deleted_at)` — 분석결과 통째로 JSON 저장, `deleted_at`으로 soft delete (A 생성, B가 삭제 기능 추가)
 - `bookmarks(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) (A 생성, B가 엔드포인트 구현)
-- `transaction_status(id, user_id, analysis_id, stage, decision, created_at, updated_at)` — UNIQUE(user_id, analysis_id) (B, 2026-07-31 생성 → 2026-08-02 2축 재설계)
+- `transaction_status(id, user_id, analysis_id, stage, decision, meeting_at, meeting_place, trade_method, memo, payment_method, created_at, updated_at)` — UNIQUE(user_id, analysis_id) (B, 2026-07-31 생성 → 2026-08-02 2축 재설계 → 거래 일정·장소·메모·결제수단 컬럼 추가)
 - `comparison_items(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id), bookmarks와 동일 구조 (B, 2026-07-31)
 - `listing_details(id, user_id, analysis_id, title, price, model_name, year, size_or_capacity, color, usage_period, components_json, defects_json, created_at, updated_at)` — UNIQUE(user_id, analysis_id) (B, 2026-08-02)
+- `comparison_history(id, user_id, item_ids_json, recommendation, snapshot_json, created_at)` — 비교 실행 당시 값 snapshot 보존 (B, 2026-08-02)
+- `checklist_state(id, user_id, analysis_id, checked_json, excluded_json, updated_at)` — 체크리스트 체크·제외 상태 서버 동기화 (B, 2026-08-02)
 
 ## SQLite ↔ Postgres(Supabase) 이중 백엔드
 
@@ -282,7 +290,9 @@ A가 임시 제공하던 것을 B로 이관 완료(2026-08-02, 순수 코드 이
 `DATABASE_URL` 형식·PgBouncer 풀러 권장 사항은 `.env.example` 참고. 상세 설계는 `backend/AGENTS.md`
 "SQLite ↔ Postgres(Supabase) 이중 백엔드" 절 참고.
 
-⚠️ 아직 실제 Supabase 인스턴스로 스모크 테스트 전 — `init_db()`의 다중 SQL문 실행 검증이 남아있음.
+✅ 실제 Supabase 인스턴스로 스모크 테스트 완료(2026-08-03) — `init_db()`의 다중 SQL문 실행 포함
+전체 CRUD 정상 동작 확인. Direct connection(5432)은 IPv6 전용이라 대부분의 로컬 네트워크에서
+연결이 안 될 수 있음 — 반드시 Pooler(6543) 연결 문자열을 사용할 것.
 
 ## 2026-08-02 확장 — 프론트 요구사항 문서 반영 (A·B)
 
@@ -305,7 +315,7 @@ A가 임시 제공하던 것을 B로 이관 완료(2026-08-02, 순수 코드 이
 `/inquiry-script`에 `questions[]`(선택형)+`combined_script`, 목록 아이템에 시각·URL·플랫폼 필드.
 `/compare` 응답에 `comparison_id` (자동 저장된 비교 기록 id).
 
-DB: `analysis_history.deleted_at` 컬럼(자동 마이그레이션) + `comparison_history` 테이블 추가 (총 7개).
+DB: `analysis_history.deleted_at` 컬럼(자동 마이그레이션) + `comparison_history`·`checklist_state` 테이블 추가 (총 8개).
 테스트: 85개 (`test_advisor.py`, `test_p0_endpoints.py` 추가).
 
 **인증 (P0-3·P0-4, 2026-08-02)**: `POST /auth/signup`·`/auth/login` → Bearer 토큰(7일).
