@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS transaction_status (
     analysis_id INTEGER NOT NULL,
     stage TEXT NOT NULL CHECK (stage IN ('BEFORE_CONTACT', 'CONTACTING', 'SCHEDULED', 'COMPLETED')),
     decision TEXT CHECK (decision IN ('CONSIDERING', 'HOLD', 'EXCLUDED')),
+    -- 거래 일정·메모 (개인정보 포함 가능 — 소유자만 조회)
+    meeting_at TIMESTAMP,
+    meeting_place TEXT,
+    trade_method TEXT CHECK (trade_method IN ('IN_PERSON', 'DELIVERY')),
+    memo TEXT,
+    payment_method TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),
@@ -100,3 +106,18 @@ CREATE TABLE IF NOT EXISTS comparison_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_comparison_history_user ON comparison_history(user_id);
+
+-- Backend B: 화면5 거래 준비 — 체크리스트 체크 상태 서버 동기화 (기기 바뀌어도 유지)
+CREATE TABLE IF NOT EXISTS checklist_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    analysis_id INTEGER NOT NULL,
+    checked_json TEXT NOT NULL,
+    excluded_json TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (analysis_id) REFERENCES analysis_history(id),
+    UNIQUE (user_id, analysis_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_checklist_state_user ON checklist_state(user_id);

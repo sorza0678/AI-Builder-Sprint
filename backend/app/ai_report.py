@@ -6,14 +6,19 @@
 - 반환 형식은 rule_engine 의 product_status/scam_warnings 와 합집합으로 병합.
 """
 import json
+import logging
 import os
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 UPSTAGE_URL = "https://api.upstage.ai/v1/chat/completions"
 # `or` 폴백: .env 에 UPSTAGE_MODEL= (빈 값)으로 있어도 기본 모델을 쓴다
 MODEL = os.getenv("UPSTAGE_MODEL") or "solar-pro3"
-TIMEOUT = 15.0
+# AI 보강은 "있으면 좋은" 부가정보다 — 오래 기다려서 /analyze 전체를 느리게 만들 이유가 없다.
+# (스크랩 6s + 시세 6s 와 합쳐 최악 지연을 20초 아래로 유지)
+TIMEOUT = 8.0
 
 _SCHEMA = {
     "name": "listing_report",
@@ -70,7 +75,10 @@ def get_ai_report(listing: dict) -> dict | None:
             "missing_components": [str(x) for x in report.get("missing_components", [])][:5],
             "scam_warnings": [str(x) for x in report.get("scam_warnings", [])][:5],
         }
-    except Exception:
+    except Exception as e:
+        # Solar 실패는 치명적이지 않다(Rule Engine 결과는 그대로) — 다만 키를 넣었는데
+        # AI 보강이 안 되는 상황을 조용히 넘기면 연동됐는지 알 수 없다.
+        logger.warning("Upstage Solar 호출 실패 → AI 보강 없이 진행 (%s: %s)", type(e).__name__, e)
         return None
 
 
