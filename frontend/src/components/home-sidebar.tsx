@@ -106,8 +106,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="분석기록"
-                  // TODO: 분석기록 화면 경로가 확정되면 연결
-                  onPress={() => undefined}
+                  onPress={() => navigate('/recent-analyses')}
                   style={({ pressed }) => [styles.quickLink, pressed && styles.pressed]}>
                   <Text style={styles.quickLinkText}>분석기록</Text>
                 </Pressable>
