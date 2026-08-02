@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import { Pressable, SectionList, StyleSheet, TextInput, View } from 'react-native';
@@ -10,7 +11,9 @@ import {
   type AnalysisHistoryItem,
 } from '@/src/components/analysis-history-row';
 import { getHistory } from '@/src/services/history-service';
+import { deleteAnalysis } from '@/src/services/analysis-service';
 import type { HistoryItem } from '@/src/services/api-types';
+import { SwipeToDelete } from '@/src/components/swipe-to-delete';
 
 interface AnalysisHistorySection {
   title: string;
@@ -65,11 +68,11 @@ function groupRecentAnalyses(items: HistoryItem[]): AnalysisHistorySection[] {
     sectionItems.push({
       id: String(item.item_id),
       analysisId: String(item.item_id),
-      location: '지역 표시 미지원',
+      location: item.location ?? item.platform ?? '지역 정보 없음',
       timeLabel: formatTimeLabel(item.created_at),
       title: item.title,
       price: `${item.price.toLocaleString('ko-KR')}원`,
-      thumbnail: 'placeholder',
+      thumbnail: item.thumbnail_url ? { uri: item.thumbnail_url } : 'placeholder',
     });
     sections.set(dateLabel, sectionItems);
   });
@@ -110,9 +113,7 @@ export default function RecentAnalysesScreen() {
     getHistory(1, 50).then(({ items: historyItems }) => setItems(historyItems));
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(load);
 
   const sections = useMemo(() => {
     const source = groupRecentAnalyses(items);
@@ -158,7 +159,20 @@ export default function RecentAnalysesScreen() {
         contentContainerStyle={styles.content}
         keyExtractor={(item) => item.id}
         ListEmptyComponent={<Text style={styles.emptyText}>{query ? '검색 결과가 없습니다.' : '최근 본 분석이 없습니다.'}</Text>}
-        renderItem={({ item }) => <AnalysisHistoryRow destination={tradeSelectionMode ? 'trade' : 'analysis'} item={item} />}
+        renderItem={({ item }) => {
+          const row = <AnalysisHistoryRow destination={tradeSelectionMode ? 'trade' : 'analysis'} item={item} />;
+          if (tradeSelectionMode) return row;
+          return (
+            <SwipeToDelete
+              accessibilityLabel={`${item.title} 분석 기록 삭제`}
+              onDelete={async () => {
+                await deleteAnalysis(item.analysisId);
+                setItems((current) => current.filter((historyItem) => String(historyItem.item_id) !== item.analysisId));
+              }}>
+              {row}
+            </SwipeToDelete>
+          );
+        }}
         renderSectionHeader={({ section }) => (
           <View style={styles.dateHeader}>
             <Text style={styles.dateText}>{section.title}</Text>

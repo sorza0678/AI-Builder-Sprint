@@ -1,12 +1,14 @@
 import { router } from 'expo-router';
 import { Image, ImageSource } from 'expo-image';
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
 import { getMyPageSummary } from '@/src/services/mypage-service';
-import { getHistory } from '@/src/services/history-service';
-import type { HistoryItem, MyPageData } from '@/src/services/api-types';
+import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
+import { getRecommendations } from '@/src/services/recommendation-service';
+import type { HistoryItem, MyPageData, RecommendedItem } from '@/src/services/api-types';
 import { getAuthSession, signOut } from '@/src/storage/auth-session-storage';
 
 interface MenuItem {
@@ -31,37 +33,75 @@ const TRADE_ITEMS: MenuItem[] = [
 ];
 
 function ListingPreview({
+  bookmarked,
   item,
+  onToggleBookmark,
 }: {
+  bookmarked: boolean;
   item: HistoryItem;
+  onToggleBookmark: (itemId: number, bookmarked: boolean) => Promise<void>;
 }) {
   return (
-    <Pressable
-      accessibilityLabel={`${item.title} 분석 기록 보기`}
-      accessibilityRole="button"
-      onPress={() => router.push('/recent-analyses')}
-      style={({ pressed }) => [styles.listingCard, pressed && styles.pressed]}>
-      <View style={styles.listingTop}>
-        <Text style={styles.listingLocation}>{item.risk_level}</Text>
-      </View>
-      <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
-      <Text numberOfLines={1} style={styles.listingTitle}>
-        {item.title}
-      </Text>
-      <View style={styles.listingFooter}>
-        <Text style={styles.listingTime}>{new Date(item.created_at).toLocaleDateString('ko-KR')}</Text>
-        <Text style={styles.scoreText}>신뢰도 {item.trust_score}</Text>
-      </View>
-    </Pressable>
+    <View style={styles.listingCard}>
+      <Pressable
+        accessibilityLabel={`${item.title} 분석 기록 보기`}
+        accessibilityRole="button"
+        onPress={() => router.push(`/analysis/${item.item_id}`)}
+        style={({ pressed }) => [styles.listingCardBody, pressed && styles.pressed]}>
+        <View style={styles.listingInfo}>
+          <Text numberOfLines={1} style={styles.listingLocation}>
+            {item.location ?? item.platform ?? '지역 정보 없음'}
+          </Text>
+          <View style={styles.listingDetails}>
+            <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
+            <Text numberOfLines={1} style={styles.listingTitle}>
+              {item.title}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.listingFooter}>
+          <Text style={styles.listingTime}>{formatRelativeTime(item.created_at)}</Text>
+        </View>
+      </Pressable>
+      <Pressable
+        accessibilityLabel={bookmarked ? `${item.title} 찜 취소` : `${item.title} 찜하기`}
+        accessibilityRole="button"
+        accessibilityState={{ selected: bookmarked }}
+        hitSlop={4}
+        onPress={() => void onToggleBookmark(item.item_id, bookmarked)}
+        style={({ pressed }) => [styles.cardFavorite, pressed && styles.pressed]}>
+        <Image
+          contentFit="contain"
+          source={bookmarked
+            ? require('@/assets/images/mypage/listing-heart-filled.svg')
+            : require('@/assets/images/mypage/listing-heart.svg')}
+          style={styles.cardFavoriteIcon}
+        />
+      </Pressable>
+    </View>
   );
 }
 
+function formatRelativeTime(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return '방금 전';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return '방금 전';
+  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}시간 전`;
+  return `${Math.floor(minutes / 1440)}일 전`;
+}
+
 function ListingSection({
+  bookmarkedIds,
   title,
   items,
+  onToggleBookmark,
 }: {
+  bookmarkedIds: Set<number>;
   title: string;
   items: HistoryItem[];
+  onToggleBookmark: (itemId: number, bookmarked: boolean) => Promise<void>;
 }) {
   return (
     <View style={styles.listingSection}>
@@ -70,7 +110,57 @@ function ListingSection({
         contentContainerStyle={styles.listingRow}
         horizontal
         showsHorizontalScrollIndicator={false}>
-        {items.map((item) => <ListingPreview item={item} key={item.item_id} />)}
+        {items.map((item) => (
+          <ListingPreview
+            bookmarked={bookmarkedIds.has(item.item_id)}
+            item={item}
+            key={item.item_id}
+            onToggleBookmark={onToggleBookmark}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function RecommendedListingRow({ item }: { item: RecommendedItem }) {
+  return (
+    <Pressable
+      accessibilityLabel={`${item.title} 분석하기`}
+      accessibilityRole="button"
+      disabled={!item.url}
+      onPress={() => item.url && router.push({ pathname: '/analysis-input', params: { url: item.url } })}
+      style={({ pressed }) => [styles.listingCard, styles.listingCardSpread, pressed && styles.pressed]}>
+      <View style={styles.listingInfo}>
+        <Text numberOfLines={1} style={styles.listingLocation}>
+          {item.platform}
+        </Text>
+        <View style={styles.listingDetails}>
+          <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
+          <Text numberOfLines={1} style={styles.listingTitle}>
+            {item.title}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.listingFooter}>
+        <Text numberOfLines={1} style={styles.listingTime}>{item.reason}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function RecommendationSection({ items }: { items: RecommendedItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <View style={styles.listingSection}>
+      <Text style={styles.sectionTitle}>추천 매물</Text>
+      <ScrollView
+        contentContainerStyle={styles.listingRow}
+        horizontal
+        showsHorizontalScrollIndicator={false}>
+        {items.map((item) => (
+          <RecommendedListingRow item={item} key={`${item.platform}-${item.title}`} />
+        ))}
       </ScrollView>
     </View>
   );
@@ -107,22 +197,43 @@ function MenuSection({ title, items }: { title: string; items: MenuItem[] }) {
 export function MyPageScreen() {
   const [summary, setSummary] = useState<MyPageData>();
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<number>>(new Set());
+  const [recommendations, setRecommendations] = useState<RecommendedItem[]>([]);
   const [accountId, setAccountId] = useState('');
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     void getAuthSession().then((session) => {
       if (!session) {
         router.replace('/login');
         return;
       }
       setAccountId(session.accountId);
-      void Promise.all([getMyPageSummary(), getHistory(1, 5)])
-        .then(([nextSummary, nextHistory]) => {
+      void Promise.all([getMyPageSummary(), getBookmarks(), getRecommendations()])
+        .then(([nextSummary, bookmarks, recommendationData]) => {
           setSummary(nextSummary);
-          setHistory(nextHistory.items);
+          setHistory(nextSummary.recent_analyses);
+          setBookmarkedIds(new Set(bookmarks.items.map((item) => item.item_id)));
+          setRecommendations(recommendationData.items);
         })
         .catch(() => undefined);
     });
-  }, []);
+  }, []));
+
+  const toggleBookmark = async (itemId: number, bookmarked: boolean): Promise<void> => {
+    if (bookmarked) await removeBookmark(itemId);
+    else await addBookmark(itemId);
+    setBookmarkedIds((current) => {
+      const next = new Set(current);
+      if (bookmarked) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+    setSummary((current) => current ? {
+      ...current,
+      bookmark_count: Math.max(0, current.bookmark_count + (bookmarked ? -1 : 1)),
+    } : current);
+  };
+
+  const displayName = summary?.user?.nickname ?? summary?.user?.id ?? accountId;
 
   const accountItems: MenuItem[] = [
     { label: '설정', icon: require('@/assets/images/sidebar/settings.svg') },
@@ -161,7 +272,7 @@ export function MyPageScreen() {
             source={require('@/assets/images/mypage/avatar.svg')}
             style={styles.avatar}
           />
-          <Text style={styles.userName}>{accountId ? `${accountId} 님` : '불러오는 중...'}</Text>
+          <Text style={styles.userName}>{displayName ? `${displayName} 님` : '불러오는 중...'}</Text>
           <Pressable
             accessibilityLabel="내 정보 수정"
             accessibilityRole="button"
@@ -189,8 +300,14 @@ export function MyPageScreen() {
         </View>
 
         <View style={styles.listingsArea}>
-          <ListingSection items={history} title="최근 분석 기록" />
+          <ListingSection
+            bookmarkedIds={bookmarkedIds}
+            items={history}
+            onToggleBookmark={toggleBookmark}
+            title="최근 분석 기록"
+          />
           {history.length === 0 && <Text style={styles.emptyText}>아직 분석 기록이 없습니다.</Text>}
+          <RecommendationSection items={recommendations} />
         </View>
 
         <View style={styles.separator} />
@@ -308,26 +425,35 @@ const styles = StyleSheet.create({
     height: 141,
     padding: 10,
     borderRadius: 12,
-    backgroundColor: '#F4F6FA',
+    backgroundColor: '#EFF0FF',
   },
-  listingCardHighlighted: { backgroundColor: '#EFF0FF' },
-  listingTop: {
-    height: 25,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+  listingCardBody: {
+    flex: 1,
     justifyContent: 'space-between',
+  },
+  listingCardSpread: {
+    justifyContent: 'space-between',
+  },
+  listingInfo: {
+    height: 73,
+    paddingTop: 4,
+    justifyContent: 'space-between',
+  },
+  listingDetails: {
+    gap: 6,
   },
   listingLocation: {
     color: '#838C97',
     fontSize: 11,
-    lineHeight: 14.3,
+    lineHeight: 11,
     letterSpacing: -0.3,
   },
   cardFavorite: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
     width: 40,
     height: 40,
-    marginTop: -10,
-    marginRight: -10,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -339,34 +465,25 @@ const styles = StyleSheet.create({
     color: '#484B4D',
     fontSize: 14,
     fontWeight: '500',
-    lineHeight: 18.2,
+    lineHeight: 14,
     letterSpacing: -0.3,
   },
   listingTitle: {
-    marginTop: 5,
-    color: '#111727',
+    color: '#8656C2',
     fontSize: 16,
     fontWeight: '600',
-    lineHeight: 20.8,
+    lineHeight: 21.6,
     letterSpacing: -0.3,
   },
   listingFooter: {
-    flex: 1,
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   listingTime: {
     color: '#515760',
     fontSize: 14,
-    lineHeight: 18.2,
-    letterSpacing: -0.3,
-  },
-  scoreText: {
-    color: '#8656C2',
-    fontSize: 11,
     fontWeight: '500',
-    lineHeight: 14.3,
+    lineHeight: 14,
     letterSpacing: -0.3,
   },
   emptyText: {
@@ -374,19 +491,6 @@ const styles = StyleSheet.create({
     color: '#838C97',
     fontSize: 14,
     lineHeight: 20,
-    letterSpacing: -0.3,
-  },
-  recommendedBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    backgroundColor: '#E4DDF8',
-  },
-  recommendedText: {
-    color: '#8656C2',
-    fontSize: 10,
-    fontWeight: '500',
-    lineHeight: 13,
     letterSpacing: -0.3,
   },
   separator: { height: 8, backgroundColor: '#F6F5FA' },

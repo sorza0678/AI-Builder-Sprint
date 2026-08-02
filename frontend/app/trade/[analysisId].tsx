@@ -2,32 +2,35 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import {
   ImageStyle,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text as NativeText,
+  TextInput,
   View,
   ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { ErrorState, LoadingState } from '@/src/components/common';
+import { AppButton, AppTextInput, ErrorState, LoadingState } from '@/src/components/common';
 import { Text } from '@/src/components/pretendard-text';
 import {
-  TRADE_QUESTIONS,
   TradeChecklistItem,
   TradeMethod,
   TradeQuestion,
 } from '@/src/mocks/trade-preparation';
 import { getAnalysisResult } from '@/src/services/analysis-service';
-import { getChecklist, getInquiryScript, setTransaction } from '@/src/services/trade-service';
-import type { ApiTransactionDecision, ApiTransactionStage } from '@/src/services/api-types';
+import { fetchPriceProposal, getChecklist, getInquiryScript, getTransactions, setTransaction } from '@/src/services/trade-service';
+import { getChecklistState, putChecklistState } from '@/src/services/checklist-state-service';
+import type { ApiChecklistGroupKey, ApiProgressTradeMethod, ApiTransactionDecision, ApiTransactionStage, PriceProposalData } from '@/src/services/api-types';
 import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
 import { AnalysisResult } from '@/src/types/marketplace';
 import { markTradeSelection } from '@/src/repositories/trade-selection-repository';
-import { getTradeChecklistState, saveTradeChecklistState } from '@/src/repositories/trade-checklist-state-repository';
+import { getTradeMethod, saveTradeMethod } from '@/src/repositories/trade-checklist-state-repository';
 
 const STEPS = ['문의', '확인', '가격', '진행'] as const;
 type TradeStep = 'inquiry' | 'check' | 'price' | 'progress';
@@ -35,6 +38,16 @@ type TradeProgressStep = 'beforeContact' | 'contacting' | 'scheduled' | 'complet
 type TradeDecision = 'considering' | 'hold' | 'excluded';
 type NullableTradeProgressStep = TradeProgressStep | null;
 type NullableTradeDecision = TradeDecision | null;
+
+type TransactionSavePatch = Partial<{
+  stage: ApiTransactionStage;
+  decision: ApiTransactionDecision | null;
+  meetingAt: string | null;
+  meetingPlace: string;
+  progressTradeMethod: ApiProgressTradeMethod | null;
+  memo: string;
+  paymentMethod: string;
+}>;
 
 const PROGRESS_STEPS: { value: TradeProgressStep; label: string }[] = [
   { value: 'beforeContact', label: '문의 전' },
@@ -58,10 +71,23 @@ const CHECKLIST_GROUPS: {
   { key: 'payment', title: '결제 전에 확인' },
 ];
 
+const CHECKLIST_GROUP_KEY_MAP: Record<ApiChecklistGroupKey, TradeChecklistItem['group']> = {
+  BEFORE_TRADE: 'before',
+  ON_SITE: 'onsite',
+  BEFORE_PAYMENT: 'payment',
+};
+
 const TRADE_METHODS: { value: TradeMethod; label: string }[] = [
   { value: 'inPerson', label: '직거래' },
   { value: 'delivery', label: '택배 거래' },
   { value: 'undecided', label: '미정' },
+];
+
+// '진행' 탭의 거래 방식 선택 — 서버 TransactionRequest.trade_method에 저장되는 별개 필드.
+// 위 TRADE_METHODS(체크리스트 탭, 로컬 전용 3종)와 혼동하지 않도록 이름과 state를 분리했다.
+const PROGRESS_TRADE_METHODS: { value: ApiProgressTradeMethod; label: string }[] = [
+  { value: 'IN_PERSON', label: '직거래' },
+  { value: 'DELIVERY', label: '택배' },
 ];
 
 const METHOD_SAFETY_NOTES: Record<TradeMethod, string[]> = {
@@ -195,26 +221,26 @@ function CheckStepContent({ items, title, itemId }: { items: TradeChecklistItem[
   useEffect(() => {
     let active = true;
     checklistStateLoaded.current = false;
-    getTradeChecklistState(itemId).then((stored) => {
+    Promise.all([
+      getTradeMethod(itemId),
+      getChecklistState(itemId).catch(() => undefined),
+    ]).then(([storedMethod, state]) => {
       if (!active) return;
-      if (stored) {
-        setMethod(stored.tradeMethod);
-        setCheckedIds(items.filter((item) => stored.checkedTexts.includes(item.text)).map((item) => item.id));
-        setExcludedIds(items.filter((item) => stored.excludedTexts.includes(item.text)).map((item) => item.id));
+      if (storedMethod) setMethod(storedMethod);
+      if (state) {
+        setCheckedIds(state.checked_item_ids);
+        setExcludedIds(state.excluded_item_ids);
       }
       checklistStateLoaded.current = true;
     });
     return () => { active = false; };
-  }, [itemId, items]);
+  }, [itemId]);
 
   useEffect(() => {
     if (!checklistStateLoaded.current) return;
-    void saveTradeChecklistState(itemId, {
-      tradeMethod: method,
-      checkedTexts: items.filter((item) => checkedIds.includes(item.id)).map((item) => item.text),
-      excludedTexts: items.filter((item) => excludedIds.includes(item.id)).map((item) => item.text),
-    });
-  }, [checkedIds, excludedIds, itemId, items, method]);
+    void saveTradeMethod(itemId, method);
+    void putChecklistState(itemId, checkedIds, excludedIds).catch(() => undefined);
+  }, [checkedIds, excludedIds, itemId, method]);
 
   const toggleChecked = (item: TradeChecklistItem): void => {
     if (isChecklistItemDisabled(item, method)) {
@@ -314,7 +340,7 @@ function CheckStepContent({ items, title, itemId }: { items: TradeChecklistItem[
             <View key={group.key}>
               <Text style={styles.checkGroupTitle}>{group.title}</Text>
               {items.every((item) => item.group !== group.key) ? (
-                <Text style={styles.unsupportedChecklistText}>그룹별 체크리스트는 지원 예정인 기능입니다.</Text>
+                <Text style={styles.unsupportedChecklistText}>확인할 항목이 없습니다.</Text>
               ) : null}
               <View style={styles.checkItems}>
                 {items.filter((item) => item.group === group.key).map(
@@ -493,20 +519,33 @@ function PriceComparisonBubble({ difference }: { difference: string }) {
   );
 }
 
-function getPriceProposal(result: AnalysisResult) {
-  const target = result.marketPrice.average;
+function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | undefined) {
+  const target = proposal?.target_price ?? result.marketPrice.average;
   const difference = Math.abs(result.listing.price - target);
+  const reasons = [...(proposal?.reasons.length ? proposal.reasons : ['AI 가격 제안 근거는 지원 예정인 기능입니다.'])];
+  const range = proposal?.negotiation_range;
+  if (range) {
+    reasons.push(`협상 가능 범위: ${range.min.toLocaleString('ko-KR')}원 ~ ${range.max.toLocaleString('ko-KR')}원`);
+  }
   return {
-    targetPrice: '지원 예정',
+    targetPrice: proposal?.target_price != null ? proposal.target_price.toLocaleString('ko-KR') : '지원 예정',
     listedPrice: result.listing.price.toLocaleString('ko-KR'),
     difference: `약 ${difference.toLocaleString('ko-KR')}원`,
-    reasons: ['AI 가격 제안 근거는 지원 예정인 기능입니다.'],
-    message: '가격 제안 메시지는 지원 예정인 기능입니다.',
+    reasons,
+    message: proposal?.message ?? '가격 제안 메시지는 지원 예정인 기능입니다.',
   };
 }
 
-function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; onCopyMessage: () => void }) {
-  const proposal = getPriceProposal(result);
+function PriceStepContent({
+  result,
+  proposal,
+  onCopyMessage,
+}: {
+  result: AnalysisResult;
+  proposal: PriceProposalData | undefined;
+  onCopyMessage: () => void;
+}) {
+  const view = buildPriceProposalView(result, proposal);
   return (
     <View style={styles.pricePage}>
       <View style={styles.priceMain}>
@@ -525,7 +564,7 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
               imageFrameStyle={styles.targetPriceImageFrame}
               imageStyle={styles.targetPriceImage}
               label="제안해볼 가격"
-              price={proposal.targetPrice}
+              price={view.targetPrice}
               watermark="TARGET"
             />
             <PriceCard
@@ -533,18 +572,18 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
               imageFrameStyle={styles.listedPriceImageFrame}
               imageStyle={styles.listedPriceImage}
               label="현재 판매가"
-              price={proposal.listedPrice}
+              price={view.listedPrice}
               watermark="LISTED"
             />
           </View>
 
-          <PriceComparisonBubble difference={proposal.difference} />
+          <PriceComparisonBubble difference={view.difference} />
         </View>
 
         <View style={styles.priceReasonSection}>
           <Text style={styles.priceSectionTitle}>이 가격을 제안한 이유</Text>
           <View style={styles.priceReasonsCard}>
-            {proposal.reasons.map((reason) => (
+            {view.reasons.map((reason) => (
               <Text key={reason} style={styles.priceReasonText}>· {reason}</Text>
             ))}
           </View>
@@ -554,7 +593,7 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
       <View style={styles.priceMessageSection}>
         <Text style={styles.groupTitle}>가격 제안 메시지</Text>
         <View style={styles.priceMessageCard}>
-          <Text style={styles.priceMessageText}>{proposal.message}</Text>
+          <Text style={styles.priceMessageText}>{view.message}</Text>
           <Pressable
             accessibilityLabel="가격 제안 메시지 복사"
             accessibilityRole="button"
@@ -573,12 +612,130 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
   );
 }
 
-function ProgressStepContent({ itemId, title }: { itemId: number; title: string }) {
-  const [progressStep, setProgressStep] = useState<NullableTradeProgressStep>(null);
-  const [decision, setDecision] = useState<NullableTradeDecision>(null);
+function formatMeetingAt(value: string | null): string {
+  if (!value) return '날짜와 시간을 선택하세요';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '날짜와 시간을 선택하세요';
+  return date.toLocaleString('ko-KR', {
+    month: 'long', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function MeetingDateTimeField({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: string | null;
+}) {
+  const [iosPickerVisible, setIosPickerVisible] = useState(false);
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.planFieldRow}>
+        <Text style={styles.planFieldLabel}>거래 일시</Text>
+        <Text style={styles.planFieldWebNote}>
+          {value ? formatMeetingAt(value) : '웹에서는 아직 지원하지 않는 기능입니다.'}
+        </Text>
+      </View>
+    );
+  }
+
+  const currentValue = value ? new Date(value) : new Date();
+
+  const openAndroidPicker = (): void => {
+    DateTimePickerAndroid.open({
+      mode: 'date',
+      value: currentValue,
+      onChange: (_event, pickedDate) => {
+        if (!pickedDate) return;
+        DateTimePickerAndroid.open({
+          mode: 'time',
+          value: pickedDate,
+          onChange: (_timeEvent, pickedTime) => {
+            if (!pickedTime) return;
+            onChange(pickedTime.toISOString());
+          },
+        });
+      },
+    });
+  };
+
+  return (
+    <View style={styles.planFieldRow}>
+      <Text style={styles.planFieldLabel}>거래 일시</Text>
+      <Pressable
+        accessibilityLabel="거래 일시 선택"
+        accessibilityRole="button"
+        onPress={() => (Platform.OS === 'android' ? openAndroidPicker() : setIosPickerVisible((current) => !current))}
+        style={({ pressed }) => [styles.planDateTrigger, pressed && styles.pressed]}>
+        <Text style={styles.planDateTriggerText}>{formatMeetingAt(value)}</Text>
+      </Pressable>
+      {Platform.OS === 'ios' && iosPickerVisible && (
+        <DateTimePicker
+          mode="datetime"
+          onChange={(_event, pickedDate) => {
+            if (pickedDate) onChange(pickedDate.toISOString());
+          }}
+          value={currentValue}
+        />
+      )}
+    </View>
+  );
+}
+
+function ProgressStepContent({
+  decision: apiDecision,
+  meetingAt,
+  meetingPlace,
+  memo,
+  onSave,
+  paymentMethod,
+  progressTradeMethod,
+  stage,
+  title,
+}: {
+  decision: ApiTransactionDecision | null;
+  meetingAt: string | null;
+  meetingPlace: string;
+  memo: string;
+  onSave: (patch: TransactionSavePatch) => void;
+  paymentMethod: string;
+  progressTradeMethod: ApiProgressTradeMethod | null;
+  stage: ApiTransactionStage | null;
+  title: string;
+}) {
+  const stageFromApi: Record<ApiTransactionStage, TradeProgressStep> = {
+    BEFORE_CONTACT: 'beforeContact', CONTACTING: 'contacting', SCHEDULED: 'scheduled', COMPLETED: 'completed',
+  };
+  const decisionFromApi: Record<ApiTransactionDecision, TradeDecision> = {
+    CONSIDERING: 'considering', HOLD: 'hold', EXCLUDED: 'excluded',
+  };
+  const progressStep: NullableTradeProgressStep = stage ? stageFromApi[stage] : null;
+  const decision: NullableTradeDecision = apiDecision ? decisionFromApi[apiDecision] : null;
   const activeIndex = progressStep
     ? PROGRESS_STEPS.findIndex((step) => step.value === progressStep)
     : -1;
+
+  const [draftMeetingAt, setDraftMeetingAt] = useState(meetingAt);
+  const [draftMeetingPlace, setDraftMeetingPlace] = useState(meetingPlace);
+  const [draftTradeMethod, setDraftTradeMethod] = useState(progressTradeMethod);
+  const [draftMemo, setDraftMemo] = useState(memo);
+  const [draftPaymentMethod, setDraftPaymentMethod] = useState(paymentMethod);
+  const [savingPlan, setSavingPlan] = useState(false);
+
+  const savePlan = (): void => {
+    if (savingPlan) return;
+    setSavingPlan(true);
+    onSave({
+      meetingAt: draftMeetingAt,
+      meetingPlace: draftMeetingPlace,
+      progressTradeMethod: draftTradeMethod,
+      memo: draftMemo,
+      paymentMethod: draftPaymentMethod,
+    });
+    setTimeout(() => setSavingPlan(false), 600);
+  };
 
   return (
     <View style={styles.progressPage}>
@@ -617,18 +774,11 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
                   accessibilityState={{ selected: active }}
                   key={step.value}
                   onPress={() => {
-                    setProgressStep(step.value);
                     const stageMap: Record<TradeProgressStep, ApiTransactionStage> = {
                       beforeContact: 'BEFORE_CONTACT', contacting: 'CONTACTING',
                       scheduled: 'SCHEDULED', completed: 'COMPLETED',
                     };
-                    const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
-                      considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
-                    };
-                    void Promise.all([
-                      markTradeSelection(itemId),
-                      setTransaction(itemId, stageMap[step.value], decision ? decisionMap[decision] : null),
-                    ]);
+                    onSave({ stage: stageMap[step.value] });
                   }}
                   style={({ pressed }) => [styles.tradeStepperItem, pressed && styles.pressed]}>
                   <View
@@ -675,20 +825,10 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
                 accessibilityState={{ selected }}
                 key={item.value}
                 onPress={() => {
-                  setDecision(item.value);
-                  if (progressStep) {
-                    const stageMap: Record<TradeProgressStep, ApiTransactionStage> = {
-                      beforeContact: 'BEFORE_CONTACT', contacting: 'CONTACTING',
-                      scheduled: 'SCHEDULED', completed: 'COMPLETED',
-                    };
-                    const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
-                      considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
-                    };
-                    void Promise.all([
-                      markTradeSelection(itemId),
-                      setTransaction(itemId, stageMap[progressStep], decisionMap[item.value]),
-                    ]);
-                  }
+                  const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
+                    considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
+                  };
+                  onSave({ decision: decisionMap[item.value] });
                 }}
                 style={({ pressed }) => [
                   styles.tradeDecisionButton,
@@ -708,6 +848,75 @@ function ProgressStepContent({ itemId, title }: { itemId: number; title: string 
         </View>
 
       </View>
+
+      <View style={styles.planSection}>
+        <Text style={styles.groupTitle}>거래 준비 정보</Text>
+
+        <MeetingDateTimeField onChange={setDraftMeetingAt} value={draftMeetingAt} />
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>거래 장소</Text>
+          <AppTextInput
+            maxLength={200}
+            onChangeText={setDraftMeetingPlace}
+            placeholder="만날 장소를 입력하세요"
+            style={styles.planTextInput}
+            value={draftMeetingPlace}
+          />
+        </View>
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>거래 방식</Text>
+          <View style={styles.methodRow}>
+            {PROGRESS_TRADE_METHODS.map((item) => {
+              const selected = draftTradeMethod === item.value;
+              return (
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  key={item.value}
+                  onPress={() => setDraftTradeMethod(selected ? null : item.value)}
+                  style={[styles.methodChip, selected && styles.methodChipSelected]}>
+                  <Text style={[styles.methodChipText, selected && styles.methodChipTextSelected]}>
+                    {item.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>메모</Text>
+          <TextInput
+            maxLength={2000}
+            multiline
+            numberOfLines={4}
+            onChangeText={setDraftMemo}
+            placeholder="개인 메모를 남겨보세요"
+            placeholderTextColor="#B9BEC5"
+            style={styles.planMemoInput}
+            value={draftMemo}
+          />
+        </View>
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>결제 방식</Text>
+          <AppTextInput
+            maxLength={50}
+            onChangeText={setDraftPaymentMethod}
+            placeholder="결제 방식을 입력하세요 (예: 현금)"
+            style={styles.planTextInput}
+            value={draftPaymentMethod}
+          />
+        </View>
+
+        <AppButton
+          disabled={savingPlan}
+          onPress={savePlan}
+          title={savingPlan ? '저장 중...' : '거래 준비 정보 저장'}
+        />
+      </View>
     </View>
   );
 }
@@ -722,7 +931,16 @@ export default function TradePreparationScreen() {
   const [activeStep, setActiveStep] = useState<TradeStep>('inquiry');
   const [favorite, setFavorite] = useState(false);
   const [serverMessage, setServerMessage] = useState('');
+  const [serverQuestions, setServerQuestions] = useState<TradeQuestion[]>([]);
   const [serverChecklist, setServerChecklist] = useState<TradeChecklistItem[]>([]);
+  const [priceProposal, setPriceProposal] = useState<PriceProposalData>();
+  const [transactionStage, setTransactionStage] = useState<ApiTransactionStage | null>(null);
+  const [transactionDecision, setTransactionDecision] = useState<ApiTransactionDecision | null>(null);
+  const [meetingAt, setMeetingAt] = useState<string | null>(null);
+  const [meetingPlace, setMeetingPlace] = useState('');
+  const [progressTradeMethod, setProgressTradeMethod] = useState<ApiProgressTradeMethod | null>(null);
+  const [memo, setMemo] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -736,22 +954,45 @@ export default function TradePreparationScreen() {
       getInquiryScript(Number(id)),
       getChecklist(Number(id)),
       getBookmarks(),
+      getTransactions(),
+      fetchPriceProposal(Number(id)),
     ])
-      .then(([analysisResult, inquiryResult, checklistResult, bookmarkResult]) => {
+      .then(([analysisResult, inquiryResult, checklistResult, bookmarkResult, transactionResult, priceProposalResult]) => {
         if (active) {
           if (analysisResult.status === 'fulfilled') setResult(analysisResult.value);
-          if (inquiryResult.status === 'fulfilled') setServerMessage(inquiryResult.value.script);
-          if (checklistResult.status === 'fulfilled') {
-            setServerChecklist(checklistResult.value.checklist.map((text, index) => ({
-              id: `server-${index}`,
-              text,
-              description: '상세 설명은 지원 예정인 기능입니다.',
-              group: 'before',
+          if (inquiryResult.status === 'fulfilled') {
+            setServerMessage(inquiryResult.value.combined_script);
+            setServerQuestions(inquiryResult.value.questions.map((question) => ({
+              id: question.id,
+              text: question.text,
+              reason: question.reason ?? '',
+              required: true,
             })));
+          }
+          if (checklistResult.status === 'fulfilled') {
+            setServerChecklist(checklistResult.value.groups.flatMap((group) =>
+              group.items.map((item) => ({
+                id: item.id,
+                text: item.text,
+                description: item.reason ?? '설명이 제공되지 않았어요.',
+                group: CHECKLIST_GROUP_KEY_MAP[group.key],
+              })),
+            ));
           }
           if (bookmarkResult.status === 'fulfilled') {
             setFavorite(bookmarkResult.value.items.some((item) => item.item_id === Number(id)));
           }
+          if (transactionResult.status === 'fulfilled') {
+            const transaction = transactionResult.value.items.find((item) => item.item_id === Number(id));
+            setTransactionStage(transaction?.stage ?? null);
+            setTransactionDecision(transaction?.decision ?? null);
+            setMeetingAt(transaction?.meeting_at ?? null);
+            setMeetingPlace(transaction?.meeting_place ?? '');
+            setProgressTradeMethod(transaction?.trade_method ?? null);
+            setMemo(transaction?.memo ?? '');
+            setPaymentMethod(transaction?.payment_method ?? '');
+          }
+          if (priceProposalResult.status === 'fulfilled') setPriceProposal(priceProposalResult.value);
         }
       })
       .finally(() => {
@@ -765,26 +1006,27 @@ export default function TradePreparationScreen() {
     };
   }, [id]);
 
+  const displayedQuestions = serverQuestions;
   const selectedQuestions = useMemo(
-    () => TRADE_QUESTIONS.filter((question) => selectedIds.includes(question.id)),
-    [selectedIds],
+    () => displayedQuestions.filter((question) => selectedIds.includes(question.id)),
+    [displayedQuestions, selectedIds],
   );
-  const displayedQuestions: typeof TRADE_QUESTIONS = [];
 
   const message = useMemo(() => {
-    const questions = selectedQuestions
-      .map((question, index) => `${index + 1}. ${question.text}`)
-      .join('\n');
+    if (selectedQuestions.length > 0) {
+      const questions = selectedQuestions
+        .map((question, index) => `${index + 1}. ${question.text}`)
+        .join('\n');
+      return [
+        '안녕하세요! 제품이 마음에 들어 문의드려요 😊',
+        questions,
+        '확인해 주시면 감사하겠습니다!',
+      ].join('\n');
+    }
     if (serverMessage) {
       return serverMessage;
     }
-    return [
-      '안녕하세요! 제품이 마음에 들어 문의드려요 😊',
-      questions,
-      '확인해 주시면 감사하겠습니다!',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    return '안녕하세요! 제품이 마음에 들어 문의드려요 😊';
   }, [selectedQuestions, serverMessage]);
 
   const toggleQuestion = (questionId: string): void => {
@@ -813,10 +1055,41 @@ export default function TradePreparationScreen() {
 
   const copyPriceMessage = async (): Promise<void> => {
     try {
-      if (result) await Clipboard.setStringAsync(getPriceProposal(result).message);
+      if (result) await Clipboard.setStringAsync(buildPriceProposalView(result, priceProposal).message);
     } catch {
       // 클립보드 접근 실패 시 화면 상태는 유지합니다.
     }
+  };
+
+  const saveTransaction = (patch: TransactionSavePatch): void => {
+    if (!result) return;
+    const nextStage = patch.stage ?? transactionStage ?? 'BEFORE_CONTACT';
+    const nextDecision = 'decision' in patch ? patch.decision ?? null : transactionDecision;
+    const nextMeetingAt = 'meetingAt' in patch ? patch.meetingAt ?? null : meetingAt;
+    const nextMeetingPlace = 'meetingPlace' in patch ? patch.meetingPlace ?? '' : meetingPlace;
+    const nextTradeMethod = 'progressTradeMethod' in patch ? patch.progressTradeMethod ?? null : progressTradeMethod;
+    const nextMemo = 'memo' in patch ? patch.memo ?? '' : memo;
+    const nextPaymentMethod = 'paymentMethod' in patch ? patch.paymentMethod ?? '' : paymentMethod;
+
+    setTransactionStage(nextStage);
+    setTransactionDecision(nextDecision);
+    setMeetingAt(nextMeetingAt);
+    setMeetingPlace(nextMeetingPlace);
+    setProgressTradeMethod(nextTradeMethod);
+    setMemo(nextMemo);
+    setPaymentMethod(nextPaymentMethod);
+
+    const itemId = Number(result.id);
+    void Promise.all([
+      markTradeSelection(itemId),
+      setTransaction(itemId, nextStage, nextDecision, {
+        meeting_at: nextMeetingAt,
+        meeting_place: nextMeetingPlace.trim() || null,
+        trade_method: nextTradeMethod,
+        memo: nextMemo.trim() || null,
+        payment_method: nextPaymentMethod.trim() || null,
+      }),
+    ]);
   };
 
   if (loading) {
@@ -924,7 +1197,9 @@ export default function TradePreparationScreen() {
           <View style={styles.questionGroup}>
             <Text style={styles.groupTitle}>꼭 물어볼 질문</Text>
             <View style={styles.questionList}>
-              <Text style={styles.unsupportedQuestionText}>지원 예정인 기능입니다.</Text>
+              {displayedQuestions.every((question) => !question.required) ? (
+                <Text style={styles.unsupportedQuestionText}>확인할 질문이 없습니다.</Text>
+              ) : null}
               {displayedQuestions.filter((question) => question.required).map((question) => (
                 <QuestionCard
                   key={question.id}
@@ -977,9 +1252,19 @@ export default function TradePreparationScreen() {
         ) : activeStep === 'check' ? (
           <CheckStepContent itemId={Number(result.id)} items={serverChecklist} title={result.listing.title} />
         ) : activeStep === 'price' ? (
-          <PriceStepContent result={result} onCopyMessage={copyPriceMessage} />
+          <PriceStepContent onCopyMessage={copyPriceMessage} proposal={priceProposal} result={result} />
         ) : (
-          <ProgressStepContent itemId={Number(result.id)} title={result.listing.title} />
+          <ProgressStepContent
+            decision={transactionDecision}
+            meetingAt={meetingAt}
+            meetingPlace={meetingPlace}
+            memo={memo}
+            onSave={saveTransaction}
+            paymentMethod={paymentMethod}
+            progressTradeMethod={progressTradeMethod}
+            stage={transactionStage}
+            title={result.listing.title}
+          />
         )}
       </ScrollView>
     </SafeAreaView>
@@ -1684,6 +1969,57 @@ const styles = StyleSheet.create({
   tradeDecisionTextSelected: {
     color: '#8656C2',
     fontWeight: '500',
+  },
+  planSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 40,
+    gap: 16,
+  },
+  planFieldRow: { gap: 8 },
+  planFieldLabel: {
+    color: '#838C97',
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 18.9,
+    letterSpacing: -0.3,
+  },
+  planFieldWebNote: {
+    color: '#B9BEC5',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  planDateTrigger: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#EDEDED',
+    borderRadius: 10,
+  },
+  planDateTriggerText: {
+    color: '#515760',
+    fontSize: 14,
+    letterSpacing: -0.3,
+  },
+  planTextInput: {
+    borderColor: '#EDEDED',
+    borderRadius: 10,
+    color: '#515760',
+    fontSize: 14,
+  },
+  planMemoInput: {
+    minHeight: 96,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#EDEDED',
+    borderRadius: 10,
+    backgroundColor: '#F6F5FA',
+    color: '#515760',
+    fontSize: 14,
+    lineHeight: 20,
+    letterSpacing: -0.3,
+    textAlignVertical: 'top',
   },
   pressed: { opacity: 0.65 },
 });

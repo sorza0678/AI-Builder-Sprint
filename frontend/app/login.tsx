@@ -15,8 +15,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
-import { getAuthSession, signInWithMockAccount } from '@/src/storage/auth-session-storage';
+import { getAuthSession } from '@/src/storage/auth-session-storage';
 import { getOrCreateDeviceGuestId } from '@/src/storage/guest-id-storage';
+import { signIn, signUp } from '@/src/services/auth-service';
+import { ApiError } from '@/src/services/api-client';
 
 const loginAssets = {
   appMark: require('@/assets/images/login/app-mark.svg'),
@@ -56,6 +58,7 @@ function LoginButton({
 
 export default function LoginScreen() {
   const [showIdLogin, setShowIdLogin] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [accountId, setAccountId] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -86,12 +89,16 @@ export default function LoginScreen() {
     setError('');
     try {
       const guestId = await getOrCreateDeviceGuestId();
-      const session = await signInWithMockAccount(accountId, password, guestId);
-      if (!session) {
-        setError('아이디 또는 비밀번호를 확인해 주세요.');
-        return;
+      if (authMode === 'signup') {
+        await signUp(accountId, password, guestId);
+      } else {
+        await signIn(accountId, password, guestId);
       }
       router.replace('/mypage');
+    } catch (submitError) {
+      setError(submitError instanceof ApiError
+        ? submitError.message
+        : authMode === 'signup' ? '회원가입에 실패했습니다.' : '로그인에 실패했습니다.');
     } finally {
       setSubmitting(false);
     }
@@ -127,8 +134,10 @@ export default function LoginScreen() {
             {showIdLogin ? (
               <View style={styles.formCard}>
                 <View style={styles.formHeading}>
-                  <Text style={styles.formTitle}>아이디로 로그인</Text>
-                  <Text style={styles.formDescription}>테스트 계정으로 마이페이지를 확인해 보세요.</Text>
+                  <Text style={styles.formTitle}>{authMode === 'signup' ? '아이디로 회원가입' : '아이디로 로그인'}</Text>
+                  <Text style={styles.formDescription}>
+                    {authMode === 'signup' ? '사용할 아이디와 비밀번호를 입력해 주세요.' : '가입한 계정으로 마이페이지를 확인해 보세요.'}
+                  </Text>
                 </View>
                 <View style={styles.fields}>
                   <TextInput
@@ -160,7 +169,21 @@ export default function LoginScreen() {
                   disabled={submitting}
                   onPress={() => void submit()}
                   style={({ pressed }) => [styles.submitButton, pressed && styles.pressed]}>
-                  <Text style={styles.submitText}>{submitting ? '로그인 중...' : '로그인'}</Text>
+                  <Text style={styles.submitText}>
+                    {submitting
+                      ? authMode === 'signup' ? '가입 중...' : '로그인 중...'
+                      : authMode === 'signup' ? '회원가입' : '로그인'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    setAuthMode((current) => current === 'login' ? 'signup' : 'login');
+                    setError('');
+                  }}
+                  style={styles.backToOptions}>
+                  <Text style={styles.backToOptionsText}>
+                    {authMode === 'signup' ? '이미 계정이 있나요? 로그인' : '처음이신가요? 회원가입'}
+                  </Text>
                 </Pressable>
                 <Pressable onPress={() => setShowIdLogin(false)} style={styles.backToOptions}>
                   <Text style={styles.backToOptionsText}>다른 방법으로 로그인</Text>

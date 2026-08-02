@@ -9,7 +9,9 @@ export async function getCachedAnalysisResult(id: string): Promise<AnalysisResul
   if (!value) return undefined;
   try { return JSON.parse(value) as AnalysisResult; } catch { return undefined; }
 }
-
+export async function removeCachedAnalysisResult(id: string): Promise<void> {
+  await AsyncStorage.removeItem(`${PREFIX}${id}`);
+}
 export async function mergeCachedListingValues<T extends { item_id: number; title: string; price: number }>(
   items: T[],
 ): Promise<T[]> {
