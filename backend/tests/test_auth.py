@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 def client(monkeypatch):
     from app import db as db_module
 
+    # 로컬 .env에 실제 DATABASE_URL(Supabase)이 있어도 테스트는 항상 SQLite를 쓰도록 강제
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     monkeypatch.setattr(db_module, "DATABASE", type(db_module.DATABASE)(path))
