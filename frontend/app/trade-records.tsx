@@ -11,9 +11,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text } from '@/src/components/pretendard-text';
-import { getTradeRecords } from '@/src/repositories/trade-record-repository';
-import type { TradeRecordDraft } from '@/src/storage/storage-types';
-import type { TradeStatus } from '@/src/types/marketplace';
+import { getTransactions } from '@/src/services/trade-service';
+import type { ApiTransactionStage, TransactionItem } from '@/src/services/api-types';
+import { getTradeSelectionIds } from '@/src/repositories/trade-selection-repository';
+
+type TradeStatus = ApiTransactionStage;
 
 type TradeFilter = 'ALL' | TradeStatus;
 
@@ -33,97 +35,37 @@ const assets = {
 
 const FILTERS: { label: string; value: TradeFilter }[] = [
   { label: '전체', value: 'ALL' },
-  { label: '문의 전', value: 'INTERESTED' },
-  { label: '문의 중', value: 'CONTACTED' },
+  { label: '문의 전', value: 'BEFORE_CONTACT' },
+  { label: '문의 중', value: 'CONTACTING' },
   { label: '거래 약속', value: 'SCHEDULED' },
   { label: '거래 완료', value: 'COMPLETED' },
 ];
 
-const MOCK_TRADE_ITEMS: TradeHistoryItem[] = [
-  {
-    id: 'mock-trade-1',
-    analysisHref: '/trade/mock-analysis-1',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
-    price: '1,850,000원',
-    status: 'INTERESTED',
-    badge: '구매고려',
-  },
-  {
-    id: 'mock-trade-2',
-    analysisHref: '/trade/mock-analysis-2',
-    title: 'BBS RS 18인치',
-    price: '600,000원',
-    status: 'INTERESTED',
-    badge: '보류',
-  },
-  {
-    id: 'mock-trade-3',
-    analysisHref: '/trade/mock-analysis-3',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
-    price: '1,850,000원',
-    status: 'CONTACTED',
-  },
-  {
-    id: 'mock-trade-4',
-    analysisHref: '/trade/mock-analysis-4',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
-    price: '1,850,000원',
-    status: 'SCHEDULED',
-  },
-  {
-    id: 'mock-trade-5',
-    analysisHref: '/trade/mock-analysis-5',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
-    price: '1,850,000원',
-    status: 'COMPLETED',
-  },
-  {
-    id: 'mock-trade-6',
-    analysisHref: '/trade/mock-analysis-6',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
-    price: '1,850,000원',
-    status: 'COMPLETED',
-  },
-  {
-    id: 'mock-trade-7',
-    analysisHref: '/trade/mock-analysis-7',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
-    price: '1,850,000원',
-    status: 'COMPLETED',
-  },
-];
-
-function getAnalysisHref(serverItemId: number): Href {
-  return `/trade/mock-analysis-${serverItemId}` as Href;
-}
-
 function getStatusLabel(status: TradeStatus): string {
   switch (status) {
-    case 'INTERESTED':
+    case 'BEFORE_CONTACT':
       return '문의 전';
-    case 'CONTACTED':
+    case 'CONTACTING':
       return '문의 중';
     case 'SCHEDULED':
       return '거래 약속';
     case 'COMPLETED':
       return '거래 완료';
-    case 'CANCELED':
-      return '취소';
   }
 }
 
 function isActiveStatus(status: TradeStatus): boolean {
-  return status === 'CONTACTED' || status === 'SCHEDULED';
+  return status === 'CONTACTING' || status === 'SCHEDULED';
 }
 
-function mapTradeRecord(record: TradeRecordDraft): TradeHistoryItem {
+function mapTradeRecord(record: TransactionItem): TradeHistoryItem {
   return {
-    id: record.localId,
-    analysisHref: getAnalysisHref(record.serverItemId),
-    title: record.listingSnapshot.title,
-    price: `${record.listingSnapshot.price.toLocaleString('ko-KR')}원`,
-    status: record.status,
-    badge: record.memo || undefined,
+    id: String(record.item_id),
+    analysisHref: `/trade/${record.item_id}` as Href,
+    title: record.title,
+    price: `${record.price.toLocaleString('ko-KR')}원`,
+    status: record.stage,
+    badge: record.decision === 'CONSIDERING' ? '구매고려' : record.decision === 'HOLD' ? '보류' : record.decision === 'EXCLUDED' ? '비교제외' : undefined,
   };
 }
 
@@ -147,13 +89,15 @@ function filterTradeItems(
 }
 
 export default function TradeRecordsScreen() {
-  const [records, setRecords] = useState<TradeRecordDraft[]>([]);
+  const [records, setRecords] = useState<TransactionItem[]>([]);
   const [query, setQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<TradeFilter>('ALL');
   const [isListScrolled, setIsListScrolled] = useState(false);
 
   const load = useCallback(() => {
-    getTradeRecords().then(setRecords);
+    Promise.all([getTransactions(), getTradeSelectionIds()]).then(([{ items }, selectedIds]) => {
+      setRecords(items.filter((item) => selectedIds.includes(item.item_id)));
+    });
   }, []);
 
   useEffect(() => {
@@ -162,7 +106,7 @@ export default function TradeRecordsScreen() {
 
   const items = useMemo(() => {
     const storedItems = records.map(mapTradeRecord);
-    return filterTradeItems([...storedItems, ...MOCK_TRADE_ITEMS], query, selectedFilter);
+    return filterTradeItems(storedItems, query, selectedFilter);
   }, [query, records, selectedFilter]);
 
   return (

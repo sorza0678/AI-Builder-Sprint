@@ -1,7 +1,9 @@
 export type PriceGrade = 'GOOD' | 'FAIR' | 'EXPENSIVE';
 export type ConditionGrade = 'A' | 'B' | 'C' | 'D';
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
-export type TradeStatus = 'INTERESTED' | 'CONTACTED' | 'SCHEDULED' | 'COMPLETED' | 'CANCELED';
+export type TradeStage = 'BEFORE_CONTACT' | 'CONTACTING' | 'SCHEDULED' | 'COMPLETED';
+export type TradeDecision = 'CONSIDERING' | 'HOLD' | 'EXCLUDED' | null;
+export interface TradeStatus { stage: TradeStage; decision: TradeDecision }
 
 export interface Listing {
   id: string;
@@ -33,4 +35,7 @@ export interface AnalysisResult {
   tradeChecklist: string[];
   sellerQuestions: string[];
   analyzedAt: string;
+  trustScore?: number;
+  marketPriceRangeSupported?: boolean;
+  conditionGradeSupported?: boolean;
 }

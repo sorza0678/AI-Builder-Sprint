@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import { Pressable, SectionList, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,8 +9,8 @@ import {
   AnalysisHistoryRow,
   type AnalysisHistoryItem,
 } from '@/src/components/analysis-history-row';
-import { getRecentAnalyses } from '@/src/repositories/recent-analysis-repository';
-import type { RecentAnalysisSnapshot } from '@/src/storage/storage-types';
+import { getHistory } from '@/src/services/history-service';
+import type { HistoryItem } from '@/src/services/api-types';
 
 interface AnalysisHistorySection {
   title: string;
@@ -21,46 +21,6 @@ const assets = {
   arrow: require('@/assets/images/recent-analyses/arrow-left.svg'),
   search: require('@/assets/images/recent-analyses/search.svg'),
 };
-
-const MOCK_HISTORY_SECTIONS: AnalysisHistorySection[] = [
-  {
-    title: '8월 1일',
-    data: [
-      {
-        id: 'mock-history-1',
-        analysisId: 'mock-analysis-1',
-        location: '경기 양주시 회천동',
-        timeLabel: '46분 전',
-        title: '맥북프로 14 M2 pro 16기가 512기가',
-        price: '1,850,000원',
-        thumbnail: 'macbook',
-      },
-      {
-        id: 'mock-history-2',
-        analysisId: 'mock-analysis-2',
-        location: '경기 양주시 회천동',
-        timeLabel: '1시간 전',
-        title: 'BBS RS 18인치',
-        price: '600,000원',
-        thumbnail: 'placeholder',
-      },
-    ],
-  },
-  {
-    title: '7월 31일',
-    data: [
-      {
-        id: 'mock-history-3',
-        analysisId: 'mock-analysis-3',
-        location: '경기 의정부시 민락동',
-        timeLabel: '1일 전',
-        title: '사진 없이 등록된 아주 긴 상품명을 확인하기 위한 중고 상품',
-        price: '10,000원',
-        thumbnail: 'placeholder',
-      },
-    ],
-  },
-];
 
 function formatDateLabel(value: string): string {
   const date = new Date(value);
@@ -96,32 +56,20 @@ function formatTimeLabel(value: string): string {
   return `${Math.floor(diffMinutes / 1440)}일 전`;
 }
 
-function getLocation(serverItemId: number): string {
-  if (serverItemId === 3) {
-    return '경기 의정부시 민락동';
-  }
-
-  return '경기 양주시 회천동';
-}
-
-function getAnalysisId(serverItemId: number): string {
-  return `mock-analysis-${serverItemId}`;
-}
-
-function groupRecentAnalyses(items: RecentAnalysisSnapshot[]): AnalysisHistorySection[] {
+function groupRecentAnalyses(items: HistoryItem[]): AnalysisHistorySection[] {
   const sections = new Map<string, AnalysisHistoryItem[]>();
 
   items.forEach((item) => {
-    const dateLabel = formatDateLabel(item.viewedAt);
+    const dateLabel = formatDateLabel(item.created_at);
     const sectionItems = sections.get(dateLabel) ?? [];
     sectionItems.push({
-      id: item.localId,
-      analysisId: getAnalysisId(item.serverItemId),
-      location: getLocation(item.serverItemId),
-      timeLabel: formatTimeLabel(item.viewedAt),
+      id: String(item.item_id),
+      analysisId: String(item.item_id),
+      location: '지역 표시 미지원',
+      timeLabel: formatTimeLabel(item.created_at),
       title: item.title,
       price: `${item.price.toLocaleString('ko-KR')}원`,
-      thumbnail: item.serverItemId === 1 ? 'macbook' : 'placeholder',
+      thumbnail: 'placeholder',
     });
     sections.set(dateLabel, sectionItems);
   });
@@ -152,25 +100,14 @@ function filterSections(
     .filter((section) => section.data.length > 0);
 }
 
-function mergeHistorySections(
-  primarySections: AnalysisHistorySection[],
-  sampleSections: AnalysisHistorySection[],
-): AnalysisHistorySection[] {
-  const merged = new Map<string, AnalysisHistoryItem[]>();
-
-  [...primarySections, ...sampleSections].forEach((section) => {
-    merged.set(section.title, [...(merged.get(section.title) ?? []), ...section.data]);
-  });
-
-  return Array.from(merged.entries()).map(([title, data]) => ({ title, data }));
-}
-
 export default function RecentAnalysesScreen() {
-  const [items, setItems] = useState<RecentAnalysisSnapshot[]>([]);
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const tradeSelectionMode = mode === 'trade';
+  const [items, setItems] = useState<HistoryItem[]>([]);
   const [query, setQuery] = useState('');
 
   const load = useCallback(() => {
-    getRecentAnalyses().then(setItems);
+    getHistory(1, 50).then(({ items: historyItems }) => setItems(historyItems));
   }, []);
 
   useEffect(() => {
@@ -178,7 +115,7 @@ export default function RecentAnalysesScreen() {
   }, [load]);
 
   const sections = useMemo(() => {
-    const source = mergeHistorySections(groupRecentAnalyses(items), MOCK_HISTORY_SECTIONS);
+    const source = groupRecentAnalyses(items);
     return filterSections(source, query);
   }, [items, query]);
 
@@ -195,14 +132,14 @@ export default function RecentAnalysesScreen() {
             <Image contentFit="contain" source={assets.arrow} style={styles.arrowIcon} />
           </View>
         </Pressable>
-        <Text style={styles.headerTitle}>분석 기록</Text>
+        <Text style={styles.headerTitle}>{tradeSelectionMode ? '거래 준비 상품 선택' : '분석 기록'}</Text>
         <View style={styles.headerButton} />
       </View>
 
       <View style={styles.searchArea}>
         <View style={styles.searchBox}>
           <TextInput
-            accessibilityLabel="분석 기록 검색"
+            accessibilityLabel={tradeSelectionMode ? '거래 준비 상품 검색' : '분석 기록 검색'}
             autoCapitalize="none"
             autoCorrect={false}
             onChangeText={setQuery}
@@ -221,7 +158,7 @@ export default function RecentAnalysesScreen() {
         contentContainerStyle={styles.content}
         keyExtractor={(item) => item.id}
         ListEmptyComponent={<Text style={styles.emptyText}>{query ? '검색 결과가 없습니다.' : '최근 본 분석이 없습니다.'}</Text>}
-        renderItem={({ item }) => <AnalysisHistoryRow item={item} />}
+        renderItem={({ item }) => <AnalysisHistoryRow destination={tradeSelectionMode ? 'trade' : 'analysis'} item={item} />}
         renderSectionHeader={({ section }) => (
           <View style={styles.dateHeader}>
             <Text style={styles.dateText}>{section.title}</Text>

@@ -22,14 +22,15 @@ const assets = {
 
 interface AnalysisHistoryRowProps {
   item: AnalysisHistoryItem;
+  destination?: 'analysis' | 'trade';
 }
 
-export function AnalysisHistoryRow({ item }: AnalysisHistoryRowProps) {
+export function AnalysisHistoryRow({ item, destination = 'analysis' }: AnalysisHistoryRowProps) {
   return (
     <Pressable
-      accessibilityLabel={`${item.title} 분석 기록 보기`}
+      accessibilityLabel={`${item.title} ${destination === 'trade' ? '거래 준비' : '분석 기록 보기'}`}
       accessibilityRole="button"
-      onPress={() => router.push(`/analysis/${item.analysisId}`)}
+      onPress={() => router.push(destination === 'trade' ? `/trade/${item.analysisId}` : `/analysis/${item.analysisId}`)}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
       <AnalysisThumbnail sourceType={item.thumbnail} />
       <View style={styles.rowBody}>

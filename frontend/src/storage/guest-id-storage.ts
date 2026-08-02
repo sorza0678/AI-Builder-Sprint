@@ -1,23 +1,17 @@
-import { STORAGE_KEYS } from './storage-keys';
-import { getJson, setJson } from './storage-client';
-
-function createLocalId(): string {
-  const randomPart = Math.random().toString(36).slice(2, 10);
-  return `${Date.now().toString(36)}-${randomPart}`;
-}
-
-export function createGuestScopedLocalId(prefix: string): string {
-  return `${prefix}-${createLocalId()}`;
-}
-
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthSession } from './auth-session-storage';
+const KEY = 'baton:guest:id';
 export async function getOrCreateGuestId(): Promise<string> {
-  const existingId = await getJson<string | null>(STORAGE_KEYS.guestId, null);
+  const session = await getAuthSession();
+  if (session) return session.accountId;
 
-  if (existingId?.startsWith('guest-')) {
-    return existingId;
-  }
+  return getOrCreateDeviceGuestId();
+}
 
-  const nextId = `guest-${createLocalId()}`;
-  await setJson(STORAGE_KEYS.guestId, nextId);
-  return nextId;
+export async function getOrCreateDeviceGuestId(): Promise<string> {
+  const existing = await AsyncStorage.getItem(KEY);
+  if (existing?.startsWith('guest-')) return existing;
+  const id = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  await AsyncStorage.setItem(KEY, id);
+  return id;
 }

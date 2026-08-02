@@ -12,8 +12,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text } from '@/src/components/pretendard-text';
-import { getComparisonHistory } from '@/src/repositories/comparison-history-repository';
-import type { ComparisonHistorySnapshot } from '@/src/storage/storage-types';
+import { compareItems, getComparisonItems } from '@/src/services/comparison-service';
+
+interface ComparisonHistorySnapshot {
+  localId: string;
+  createdAt: string;
+  recommendation: string;
+  itemSnapshots: { serverItemId: number; title: string; price: number }[];
+}
 
 type ComparisonThumbnailKind = 'macbook' | 'placeholder';
 
@@ -45,91 +51,6 @@ const assets = {
   search: require('@/assets/images/recent-analyses/search.svg'),
 };
 
-const MOCK_COMPARISON_SECTIONS: ComparisonHistorySection[] = [
-  {
-    title: '8월 1일',
-    data: [
-      {
-        id: 'mock-comparison-1',
-        href: '/compare',
-        title: 'Enkei RPF1 17인치 외 2개',
-        recommendation: 'Enkei RPF1 추천',
-        products: [
-          {
-            id: 'mock-comparison-1-product-1',
-            title: '맥북프로 14 M2 pro 16기가 512기가',
-            price: '1,850,000원',
-            thumbnail: 'macbook',
-          },
-          {
-            id: 'mock-comparison-1-product-2',
-            title: 'BBS RS 18인치',
-            price: '600,000원',
-            thumbnail: 'placeholder',
-          },
-          {
-            id: 'mock-comparison-1-product-3',
-            title: 'BBS RS 18인치',
-            price: '600,000원',
-            thumbnail: 'placeholder',
-          },
-        ],
-      },
-      {
-        id: 'mock-comparison-2',
-        href: '/compare',
-        title: '맥북프로 14 M2 pro 16기가 512기가 외 1개',
-        recommendation: 'BBS RS 18인치 추천',
-        products: [
-          {
-            id: 'mock-comparison-2-product-1',
-            title: '맥북프로 14 M2 pro 16기가 512기가',
-            price: '1,850,000원',
-            thumbnail: 'macbook',
-          },
-          {
-            id: 'mock-comparison-2-product-2',
-            title: 'BBS RS 18인치',
-            price: '600,000원',
-            thumbnail: 'placeholder',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    title: '7월 31일',
-    data: [
-      {
-        id: 'mock-comparison-3',
-        href: '/compare',
-        title: 'Enkei RPF1 17인치 외 2개',
-        recommendation: 'Enkei RPF1 추천',
-        products: [
-          {
-            id: 'mock-comparison-3-product-1',
-            title: '맥북프로 14 M2 pro 16기가 512기가',
-            price: '1,850,000원',
-            thumbnail: 'macbook',
-          },
-          {
-            id: 'mock-comparison-3-product-2',
-            title: 'BBS RS 18인치',
-            price: '600,000원',
-            thumbnail: 'placeholder',
-          },
-          {
-            id: 'mock-comparison-3-product-3',
-            title: 'BBS RS 18인치',
-            price: '600,000원',
-            thumbnail: 'placeholder',
-          },
-        ],
-      },
-    ],
-  },
-];
-
 function formatDateLabel(value: string): string {
   const date = new Date(value);
 
@@ -153,11 +74,11 @@ function mapComparisonHistory(item: ComparisonHistorySnapshot): ComparisonHistor
     href: '/compare',
     title: getComparisonTitle(item),
     recommendation: item.recommendation,
-    products: item.itemSnapshots.slice(0, 3).map((snapshot, index) => ({
+    products: item.itemSnapshots.slice(0, 3).map((snapshot) => ({
       id: `${item.localId}-${snapshot.serverItemId}`,
       title: snapshot.title,
       price: `${snapshot.price.toLocaleString('ko-KR')}원`,
-      thumbnail: index === 0 ? 'macbook' : 'placeholder',
+      thumbnail: 'placeholder',
     })),
   };
 }
@@ -173,19 +94,6 @@ function groupComparisonHistory(items: ComparisonHistorySnapshot[]): ComparisonH
   });
 
   return Array.from(sections.entries()).map(([title, data]) => ({ title, data }));
-}
-
-function mergeSections(
-  primarySections: ComparisonHistorySection[],
-  sampleSections: ComparisonHistorySection[],
-): ComparisonHistorySection[] {
-  const merged = new Map<string, ComparisonHistoryItem[]>();
-
-  [...primarySections, ...sampleSections].forEach((section) => {
-    merged.set(section.title, [...(merged.get(section.title) ?? []), ...section.data]);
-  });
-
-  return Array.from(merged.entries()).map(([title, data]) => ({ title, data }));
 }
 
 function filterSections(
@@ -232,7 +140,25 @@ export default function ComparisonHistoryScreen() {
   const [isListScrolled, setIsListScrolled] = useState(false);
 
   const load = useCallback(() => {
-    getComparisonHistory().then(setHistoryItems);
+    getComparisonItems().then(async ({ items }) => {
+      if (!items.length) {
+        setHistoryItems([]);
+        return;
+      }
+      const recommendation = items.length >= 2
+        ? (await compareItems(items.slice(0, 3).map((item) => item.item_id))).recommendation
+        : '비교할 상품을 2개 이상 추가해 주세요';
+      setHistoryItems([{
+        localId: 'current-comparison',
+        createdAt: new Date().toISOString(),
+        recommendation,
+        itemSnapshots: items.slice(0, 3).map((item) => ({
+          serverItemId: item.item_id,
+          title: item.title,
+          price: item.price,
+        })),
+      }]);
+    });
   }, []);
 
   useEffect(() => {
@@ -240,10 +166,7 @@ export default function ComparisonHistoryScreen() {
   }, [load]);
 
   const sections = useMemo(() => {
-    const source = mergeSections(
-      groupComparisonHistory(historyItems),
-      MOCK_COMPARISON_SECTIONS,
-    );
+    const source = groupComparisonHistory(historyItems);
     return filterSections(source, query);
   }, [historyItems, query]);
 
@@ -280,6 +203,12 @@ export default function ComparisonHistoryScreen() {
             <Image contentFit="contain" source={assets.search} style={styles.searchIcon} />
           </View>
         </View>
+      </View>
+
+      <View style={styles.supportNotice}>
+        <Text style={styles.supportNoticeText}>
+          과거 비교 기록 저장은 지원 예정인 기능입니다. 현재 비교 중인 상품만 표시됩니다.
+        </Text>
       </View>
 
       <SectionList
@@ -463,6 +392,21 @@ const styles = StyleSheet.create({
   searchIcon: {
     height: 15,
     width: 15,
+  },
+  supportNotice: {
+    marginHorizontal: 20,
+    marginBottom: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F4F6FA',
+  },
+  supportNoticeText: {
+    color: '#838C97',
+    fontSize: 12,
+    fontWeight: '400',
+    lineHeight: 17,
+    letterSpacing: -0.3,
   },
   list: {
     flex: 1,

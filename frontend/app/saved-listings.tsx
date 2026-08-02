@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Href, router } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import {
   FlatList,
@@ -11,8 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text } from '@/src/components/pretendard-text';
-import { getSavedListings } from '@/src/repositories/saved-listing-repository';
-import type { SavedListingSnapshot } from '@/src/storage/storage-types';
+import { getBookmarks } from '@/src/services/bookmark-service';
+import type { AnalyzeData } from '@/src/services/api-types';
 
 type SavedListingThumbnail = 'macbook' | 'placeholder' | { uri: string };
 
@@ -33,81 +34,15 @@ const assets = {
   search: require('@/assets/images/recent-analyses/search.svg'),
 };
 
-const MOCK_SAVED_LISTINGS: SavedListingItem[] = [
-  {
-    id: 'mock-saved-1',
-    analysisHref: '/analysis/mock-analysis-1',
-    location: '경기 양주시 회천동',
-    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가',
-    price: '1,850,000원',
-    timeLabel: '46분 전',
-    thumbnail: 'macbook',
-  },
-  {
-    id: 'mock-saved-2',
-    analysisHref: '/analysis/mock-analysis-2',
-    location: '경기 양주시 회천동',
-    title: 'BBS RS 18인치',
-    price: '600,000원',
-    timeLabel: '46분 전',
-    thumbnail: 'placeholder',
-  },
-  {
-    id: 'mock-saved-3',
-    analysisHref: '/analysis/mock-analysis-3',
-    location: '경기 의정부시 민락동',
-    title: 'Enkei RPF1 17인치',
-    price: '10,000원',
-    timeLabel: '1시간 전',
-    thumbnail: 'placeholder',
-  },
-];
-
-function formatRelativeTime(value: string): string {
-  const timestamp = Date.parse(value);
-
-  if (Number.isNaN(timestamp)) {
-    return '방금 전';
-  }
-
-  const diffMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
-
-  if (diffMinutes < 1) {
-    return '방금 전';
-  }
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes}분 전`;
-  }
-
-  if (diffMinutes < 1440) {
-    return `${Math.floor(diffMinutes / 60)}시간 전`;
-  }
-
-  return `${Math.floor(diffMinutes / 1440)}일 전`;
-}
-
-function getLocation(serverItemId: number): string {
-  if (serverItemId === 3) {
-    return '경기 의정부시 민락동';
-  }
-
-  return '경기 양주시 회천동';
-}
-
-function getAnalysisHref(serverItemId: number): Href {
-  return `/analysis/mock-analysis-${serverItemId}` as Href;
-}
-
-function mapSavedListing(item: SavedListingSnapshot): SavedListingItem {
+function mapSavedListing(item: AnalyzeData): SavedListingItem {
   return {
-    id: item.localId,
-    analysisHref: getAnalysisHref(item.serverItemId),
-    location: getLocation(item.serverItemId),
+    id: String(item.item_id),
+    analysisHref: `/analysis/${item.item_id}` as Href,
+    location: '지역 표시 미지원',
     title: item.title,
     price: `${item.price.toLocaleString('ko-KR')}원`,
-    timeLabel: formatRelativeTime(item.updatedAt),
-    thumbnail: item.imageUrl ? { uri: item.imageUrl } : 'placeholder',
+    timeLabel: '시각 표시 미지원',
+    thumbnail: 'placeholder',
   };
 }
 
@@ -124,21 +59,19 @@ function filterSavedListings(items: SavedListingItem[], query: string): SavedLis
 }
 
 export default function SavedListingsScreen() {
-  const [storedListings, setStoredListings] = useState<SavedListingSnapshot[]>([]);
+  const [storedListings, setStoredListings] = useState<AnalyzeData[]>([]);
   const [query, setQuery] = useState('');
   const [isListScrolled, setIsListScrolled] = useState(false);
 
   const load = useCallback(() => {
-    getSavedListings().then(setStoredListings);
+    getBookmarks().then(({ items }) => setStoredListings(items));
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(load);
 
   const items = useMemo(() => {
     const storedItems = storedListings.map(mapSavedListing);
-    return filterSavedListings([...storedItems, ...MOCK_SAVED_LISTINGS], query);
+    return filterSavedListings(storedItems, query);
   }, [query, storedListings]);
 
   return (

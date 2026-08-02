@@ -1,15 +1,13 @@
 import { router } from 'expo-router';
 import { Image, ImageSource } from 'expo-image';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
-
-import {
-  MY_PAGE_HISTORY,
-  MY_PAGE_RECOMMENDATIONS,
-  MyPageListing,
-} from '@/src/mocks/mypage';
+import { getMyPageSummary } from '@/src/services/mypage-service';
+import { getHistory } from '@/src/services/history-service';
+import type { HistoryItem, MyPageData } from '@/src/services/api-types';
+import { getAuthSession, signOut } from '@/src/storage/auth-session-storage';
 
 interface MenuItem {
   label: string;
@@ -18,75 +16,41 @@ interface MenuItem {
 }
 
 const ACTIVITY_ITEMS: MenuItem[] = [
-  { label: '찜한 상품', icon: require('@/assets/images/mypage/heart.svg') },
-  { label: '분석 기록', icon: require('@/assets/images/mypage/analysis.svg') },
+  { label: '찜한 상품', icon: require('@/assets/images/mypage/heart.svg'), onPress: () => router.push('/saved-listings') },
+  { label: '분석 기록', icon: require('@/assets/images/mypage/analysis.svg'), onPress: () => router.push('/recent-analyses') },
   {
     label: '비교 기록',
     icon: require('@/assets/images/mypage/compare.svg'),
-    onPress: () => router.push('/compare'),
+    onPress: () => router.push('/comparison-history'),
   },
 ];
 
 const TRADE_ITEMS: MenuItem[] = [
-  { label: '거래 준비', icon: require('@/assets/images/mypage/trade-ready.svg') },
-  { label: '거래 내역', icon: require('@/assets/images/sidebar/receipt.svg') },
+  { label: '거래 준비', icon: require('@/assets/images/mypage/trade-ready.svg'), onPress: () => router.push('/recent-analyses?mode=trade') },
+  { label: '거래 내역', icon: require('@/assets/images/sidebar/receipt.svg'), onPress: () => router.push('/trade-records') },
 ];
 
-const ACCOUNT_ITEMS: MenuItem[] = [
-  { label: '설정', icon: require('@/assets/images/sidebar/settings.svg') },
-  {
-    label: '로그아웃',
-    icon: require('@/assets/images/mypage/logout.svg'),
-    onPress: () => router.replace('/login'),
-  },
-];
-
-function ListingPreview({ item }: { item: MyPageListing }) {
-  const [favorite, setFavorite] = useState(false);
-
+function ListingPreview({
+  item,
+}: {
+  item: HistoryItem;
+}) {
   return (
     <Pressable
-      accessibilityLabel={`${item.title} 카드 선택`}
+      accessibilityLabel={`${item.title} 분석 기록 보기`}
       accessibilityRole="button"
-      onPress={() => router.push('/analysis/mock-analysis-1')}
-      style={({ pressed }) => [
-        styles.listingCard,
-        pressed && styles.listingCardHighlighted,
-      ]}>
+      onPress={() => router.push('/recent-analyses')}
+      style={({ pressed }) => [styles.listingCard, pressed && styles.pressed]}>
       <View style={styles.listingTop}>
-        <Text style={styles.listingLocation}>{item.location}</Text>
-        <Pressable
-          accessibilityLabel={`${item.title} ${favorite ? '찜 취소' : '찜하기'}`}
-          accessibilityRole="button"
-          accessibilityState={{ selected: favorite }}
-          hitSlop={8}
-          onPress={(event) => {
-            event.stopPropagation();
-            setFavorite((current) => !current);
-          }}
-          style={({ pressed }) => [styles.cardFavorite, pressed && styles.pressed]}>
-          <Image
-            contentFit="contain"
-            source={
-              favorite
-                ? require('@/assets/images/mypage/listing-heart-filled.svg')
-                : require('@/assets/images/mypage/listing-heart.svg')
-            }
-            style={styles.cardFavoriteIcon}
-          />
-        </Pressable>
+        <Text style={styles.listingLocation}>{item.risk_level}</Text>
       </View>
-      <Text style={styles.listingPrice}>{item.price}</Text>
+      <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
       <Text numberOfLines={1} style={styles.listingTitle}>
         {item.title}
       </Text>
       <View style={styles.listingFooter}>
-        <Text style={styles.listingTime}>{item.time}</Text>
-        {item.recommended && (
-          <View style={styles.recommendedBadge}>
-            <Text style={styles.recommendedText}>추천</Text>
-          </View>
-        )}
+        <Text style={styles.listingTime}>{new Date(item.created_at).toLocaleDateString('ko-KR')}</Text>
+        <Text style={styles.scoreText}>신뢰도 {item.trust_score}</Text>
       </View>
     </Pressable>
   );
@@ -97,7 +61,7 @@ function ListingSection({
   items,
 }: {
   title: string;
-  items: MyPageListing[];
+  items: HistoryItem[];
 }) {
   return (
     <View style={styles.listingSection}>
@@ -106,9 +70,7 @@ function ListingSection({
         contentContainerStyle={styles.listingRow}
         horizontal
         showsHorizontalScrollIndicator={false}>
-        {items.map((item) => (
-          <ListingPreview item={item} key={item.id} />
-        ))}
+        {items.map((item) => <ListingPreview item={item} key={item.item_id} />)}
       </ScrollView>
     </View>
   );
@@ -143,6 +105,33 @@ function MenuSection({ title, items }: { title: string; items: MenuItem[] }) {
 }
 
 export function MyPageScreen() {
+  const [summary, setSummary] = useState<MyPageData>();
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [accountId, setAccountId] = useState('');
+  useEffect(() => {
+    void getAuthSession().then((session) => {
+      if (!session) {
+        router.replace('/login');
+        return;
+      }
+      setAccountId(session.accountId);
+      void Promise.all([getMyPageSummary(), getHistory(1, 5)])
+        .then(([nextSummary, nextHistory]) => {
+          setSummary(nextSummary);
+          setHistory(nextHistory.items);
+        })
+        .catch(() => undefined);
+    });
+  }, []);
+
+  const accountItems: MenuItem[] = [
+    { label: '설정', icon: require('@/assets/images/sidebar/settings.svg') },
+    {
+      label: '로그아웃',
+      icon: require('@/assets/images/mypage/logout.svg'),
+      onPress: () => void signOut().then(() => router.replace('/home')),
+    },
+  ];
   return (
     <SafeAreaView edges={['top']} style={styles.safeArea}>
       <View style={styles.header}>
@@ -172,7 +161,7 @@ export function MyPageScreen() {
             source={require('@/assets/images/mypage/avatar.svg')}
             style={styles.avatar}
           />
-          <Text style={styles.userName}>qweasd101 님</Text>
+          <Text style={styles.userName}>{accountId ? `${accountId} 님` : '불러오는 중...'}</Text>
           <Pressable
             accessibilityLabel="내 정보 수정"
             accessibilityRole="button"
@@ -184,31 +173,31 @@ export function MyPageScreen() {
           <View style={styles.statsCard}>
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>분석 완료</Text>
-              <Text style={styles.statValue}>38개</Text>
+              <Text style={styles.statValue}>{summary ? `${summary.analysis_count}개` : '—'}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>찜한 매물</Text>
-              <Text style={styles.statValue}>12개</Text>
+              <Text style={styles.statValue}>{summary ? `${summary.bookmark_count}개` : '—'}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>거래 완료</Text>
-              <Text style={styles.statValue}>7개</Text>
+              <Text style={styles.statValue}>{summary ? `${summary.transaction_completed_count}개` : '—'}</Text>
             </View>
           </View>
         </View>
 
         <View style={styles.listingsArea}>
-          <ListingSection items={MY_PAGE_RECOMMENDATIONS} title="추천" />
-          <ListingSection items={MY_PAGE_HISTORY} title="기록" />
+          <ListingSection items={history} title="최근 분석 기록" />
+          {history.length === 0 && <Text style={styles.emptyText}>아직 분석 기록이 없습니다.</Text>}
         </View>
 
         <View style={styles.separator} />
         <View style={styles.menuArea}>
           <MenuSection items={ACTIVITY_ITEMS} title="내 활동" />
           <MenuSection items={TRADE_ITEMS} title="내 거래" />
-          <MenuSection items={ACCOUNT_ITEMS} title="계정" />
+          <MenuSection items={accountItems} title="계정" />
           <Pressable
             accessibilityLabel="회원 탈퇴"
             accessibilityRole="button"
@@ -371,6 +360,20 @@ const styles = StyleSheet.create({
     color: '#515760',
     fontSize: 14,
     lineHeight: 18.2,
+    letterSpacing: -0.3,
+  },
+  scoreText: {
+    color: '#8656C2',
+    fontSize: 11,
+    fontWeight: '500',
+    lineHeight: 14.3,
+    letterSpacing: -0.3,
+  },
+  emptyText: {
+    paddingHorizontal: 16,
+    color: '#838C97',
+    fontSize: 14,
+    lineHeight: 20,
     letterSpacing: -0.3,
   },
   recommendedBadge: {
