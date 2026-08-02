@@ -6,6 +6,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
 import { getMyPageSummary } from '@/src/services/mypage-service';
+import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
 import type { HistoryItem, MyPageData } from '@/src/services/api-types';
 import { getAuthSession, signOut } from '@/src/storage/auth-session-storage';
 
@@ -31,37 +32,76 @@ const TRADE_ITEMS: MenuItem[] = [
 ];
 
 function ListingPreview({
+  bookmarked,
   item,
+  onToggleBookmark,
 }: {
+  bookmarked: boolean;
   item: HistoryItem;
+  onToggleBookmark: (itemId: number, bookmarked: boolean) => Promise<void>;
 }) {
   return (
     <Pressable
       accessibilityLabel={`${item.title} 분석 기록 보기`}
       accessibilityRole="button"
-      onPress={() => router.push('/recent-analyses')}
+      onPress={() => router.push(`/analysis/${item.item_id}`)}
       style={({ pressed }) => [styles.listingCard, pressed && styles.pressed]}>
-      <View style={styles.listingTop}>
-        <Text style={styles.listingLocation}>{item.risk_level}</Text>
+      <View style={styles.listingInfo}>
+        <Text numberOfLines={1} style={styles.listingLocation}>
+          {item.location ?? item.platform ?? '지역 정보 없음'}
+        </Text>
+        <View style={styles.listingDetails}>
+          <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
+          <Text numberOfLines={1} style={styles.listingTitle}>
+            {item.title}
+          </Text>
+        </View>
       </View>
-      <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
-      <Text numberOfLines={1} style={styles.listingTitle}>
-        {item.title}
-      </Text>
       <View style={styles.listingFooter}>
-        <Text style={styles.listingTime}>{new Date(item.created_at).toLocaleDateString('ko-KR')}</Text>
-        <Text style={styles.scoreText}>신뢰도 {item.trust_score}</Text>
+        <Text style={styles.listingTime}>{formatRelativeTime(item.created_at)}</Text>
       </View>
+      <Pressable
+        accessibilityLabel={bookmarked ? `${item.title} 찜 취소` : `${item.title} 찜하기`}
+        accessibilityRole="button"
+        accessibilityState={{ selected: bookmarked }}
+        hitSlop={4}
+        onPress={(event) => {
+          event.stopPropagation();
+          void onToggleBookmark(item.item_id, bookmarked);
+        }}
+        style={({ pressed }) => [styles.cardFavorite, pressed && styles.pressed]}>
+        <Image
+          contentFit="contain"
+          source={bookmarked
+            ? require('@/assets/images/mypage/listing-heart-filled.svg')
+            : require('@/assets/images/mypage/listing-heart.svg')}
+          style={styles.cardFavoriteIcon}
+        />
+      </Pressable>
     </Pressable>
   );
 }
 
+function formatRelativeTime(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return '방금 전';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return '방금 전';
+  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}시간 전`;
+  return `${Math.floor(minutes / 1440)}일 전`;
+}
+
 function ListingSection({
+  bookmarkedIds,
   title,
   items,
+  onToggleBookmark,
 }: {
+  bookmarkedIds: Set<number>;
   title: string;
   items: HistoryItem[];
+  onToggleBookmark: (itemId: number, bookmarked: boolean) => Promise<void>;
 }) {
   return (
     <View style={styles.listingSection}>
@@ -70,7 +110,14 @@ function ListingSection({
         contentContainerStyle={styles.listingRow}
         horizontal
         showsHorizontalScrollIndicator={false}>
-        {items.map((item) => <ListingPreview item={item} key={item.item_id} />)}
+        {items.map((item) => (
+          <ListingPreview
+            bookmarked={bookmarkedIds.has(item.item_id)}
+            item={item}
+            key={item.item_id}
+            onToggleBookmark={onToggleBookmark}
+          />
+        ))}
       </ScrollView>
     </View>
   );
@@ -107,6 +154,7 @@ function MenuSection({ title, items }: { title: string; items: MenuItem[] }) {
 export function MyPageScreen() {
   const [summary, setSummary] = useState<MyPageData>();
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<number>>(new Set());
   const [accountId, setAccountId] = useState('');
   useFocusEffect(useCallback(() => {
     void getAuthSession().then((session) => {
@@ -115,14 +163,30 @@ export function MyPageScreen() {
         return;
       }
       setAccountId(session.accountId);
-      void getMyPageSummary()
-        .then((nextSummary) => {
+      void Promise.all([getMyPageSummary(), getBookmarks()])
+        .then(([nextSummary, bookmarks]) => {
           setSummary(nextSummary);
           setHistory(nextSummary.recent_analyses);
+          setBookmarkedIds(new Set(bookmarks.items.map((item) => item.item_id)));
         })
         .catch(() => undefined);
     });
   }, []));
+
+  const toggleBookmark = async (itemId: number, bookmarked: boolean): Promise<void> => {
+    if (bookmarked) await removeBookmark(itemId);
+    else await addBookmark(itemId);
+    setBookmarkedIds((current) => {
+      const next = new Set(current);
+      if (bookmarked) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+    setSummary((current) => current ? {
+      ...current,
+      bookmark_count: Math.max(0, current.bookmark_count + (bookmarked ? -1 : 1)),
+    } : current);
+  };
 
   const accountItems: MenuItem[] = [
     { label: '설정', icon: require('@/assets/images/sidebar/settings.svg') },
@@ -189,7 +253,12 @@ export function MyPageScreen() {
         </View>
 
         <View style={styles.listingsArea}>
-          <ListingSection items={history} title="최근 분석 기록" />
+          <ListingSection
+            bookmarkedIds={bookmarkedIds}
+            items={history}
+            onToggleBookmark={toggleBookmark}
+            title="최근 분석 기록"
+          />
           {history.length === 0 && <Text style={styles.emptyText}>아직 분석 기록이 없습니다.</Text>}
         </View>
 
@@ -308,26 +377,29 @@ const styles = StyleSheet.create({
     height: 141,
     padding: 10,
     borderRadius: 12,
-    backgroundColor: '#F4F6FA',
-  },
-  listingCardHighlighted: { backgroundColor: '#EFF0FF' },
-  listingTop: {
-    height: 25,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    backgroundColor: '#EFF0FF',
     justifyContent: 'space-between',
+  },
+  listingInfo: {
+    height: 73,
+    paddingTop: 4,
+    justifyContent: 'space-between',
+  },
+  listingDetails: {
+    gap: 6,
   },
   listingLocation: {
     color: '#838C97',
     fontSize: 11,
-    lineHeight: 14.3,
+    lineHeight: 11,
     letterSpacing: -0.3,
   },
   cardFavorite: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
     width: 40,
     height: 40,
-    marginTop: -10,
-    marginRight: -10,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -339,34 +411,25 @@ const styles = StyleSheet.create({
     color: '#484B4D',
     fontSize: 14,
     fontWeight: '500',
-    lineHeight: 18.2,
+    lineHeight: 14,
     letterSpacing: -0.3,
   },
   listingTitle: {
-    marginTop: 5,
-    color: '#111727',
+    color: '#8656C2',
     fontSize: 16,
     fontWeight: '600',
-    lineHeight: 20.8,
+    lineHeight: 21.6,
     letterSpacing: -0.3,
   },
   listingFooter: {
-    flex: 1,
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   listingTime: {
     color: '#515760',
     fontSize: 14,
-    lineHeight: 18.2,
-    letterSpacing: -0.3,
-  },
-  scoreText: {
-    color: '#8656C2',
-    fontSize: 11,
     fontWeight: '500',
-    lineHeight: 14.3,
+    lineHeight: 14,
     letterSpacing: -0.3,
   },
   emptyText: {
@@ -374,19 +437,6 @@ const styles = StyleSheet.create({
     color: '#838C97',
     fontSize: 14,
     lineHeight: 20,
-    letterSpacing: -0.3,
-  },
-  recommendedBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    backgroundColor: '#E4DDF8',
-  },
-  recommendedText: {
-    color: '#8656C2',
-    fontSize: 10,
-    fontWeight: '500',
-    lineHeight: 13,
     letterSpacing: -0.3,
   },
   separator: { height: 8, backgroundColor: '#F6F5FA' },
