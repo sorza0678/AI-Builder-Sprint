@@ -79,7 +79,7 @@ export default function HomeScreen() {
         await Clipboard.getStringAsync(),
       );
       if (!clipboardUrl) {
-        setInputError("클립보드에서 올바른 링크를 찾지 못했어요.");
+        router.push("/analysis-input");
         return;
       }
 
@@ -88,11 +88,7 @@ export default function HomeScreen() {
         params: { url: clipboardUrl },
       });
     } catch {
-      setInputError("클립보드 내용을 가져오지 못했습니다.");
-      Alert.alert(
-        "붙여넣기 실패",
-        "클립보드 내용을 가져오지 못했습니다. 다시 시도해 주세요.",
-      );
+      router.push("/analysis-input");
     } finally {
       setIsPasting(false);
     }
@@ -155,7 +151,7 @@ export default function HomeScreen() {
   };
 
   const handleHeaderActionPress = (): void => {
-    router.push("/compare");
+    router.push("/compare?reset=1");
   };
 
   return (

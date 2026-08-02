@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
-import { router } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import {
   Pressable,
+  Modal,
   ScrollView,
   StyleSheet,
   View,
@@ -11,35 +12,120 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
 
 import {
-  COMPARISON_GUIDES,
-  COMPARISON_ITEMS,
   COMPARISON_ROWS,
   PRIORITY_CONTENT,
+  ComparisonItem,
   ComparisonPriority,
 } from '@/src/mocks/comparison';
+import { addComparisonItem, compareItems, getComparisonItems, removeComparisonItem } from '@/src/services/comparison-service';
+import { getHistory } from '@/src/services/history-service';
+import type { AnalyzeData, HistoryItem } from '@/src/services/api-types';
 
 const PRIORITIES: ComparisonPriority[] = ['price', 'safety', 'condition', 'components'];
 
 export default function CompareScreen() {
+  const { reset } = useLocalSearchParams<{ reset?: string }>();
   const [priority, setPriority] = useState<ComparisonPriority>('price');
-  const [visibleIds, setVisibleIds] = useState(() =>
-    COMPARISON_ITEMS.slice(0, 2).map((item) => item.id),
-  );
+  const [apiItems, setApiItems] = useState<AnalyzeData[]>([]);
+  const [recentItems, setRecentItems] = useState<HistoryItem[]>([]);
+  const [recommendation, setRecommendation] = useState('');
+  const [visibleIds, setVisibleIds] = useState<string[]>([]);
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [addingItemId, setAddingItemId] = useState<number>();
+  const [expandedRiskId, setExpandedRiskId] = useState<string>();
 
-  const content = PRIORITY_CONTENT[priority];
+  const loadComparison = useCallback(async () => {
+    const [{ items }, history] = await Promise.all([
+      getComparisonItems(),
+      getHistory(1, 50),
+    ]);
+      setApiItems(items);
+      setRecentItems(history.items);
+      setVisibleIds(items.slice(0, 3).map((item) => String(item.item_id)));
+      if (items.length >= 2) {
+        const compared = await compareItems(items.slice(0, 3).map((item) => item.item_id));
+        setRecommendation(compared.recommendation);
+      } else {
+        setRecommendation('');
+      }
+  }, []);
+
+  useEffect(() => {
+    const initialize = async (): Promise<void> => {
+      if (reset === '1') {
+        const current = await getComparisonItems();
+        await Promise.all(current.items.map((item) => removeComparisonItem(item.item_id)));
+      }
+      await loadComparison();
+    };
+
+    initialize().catch(() => {
+      setApiItems([]);
+      setRecentItems([]);
+      setVisibleIds([]);
+    });
+  }, [loadComparison, reset]);
+
+  const comparisonItems = useMemo<ComparisonItem[]>(() => apiItems.map((item) => ({
+    id: String(item.item_id),
+    name: item.title,
+    price: `${item.price.toLocaleString('ko-KR')}원`,
+    totalScore: item.trust_score,
+    scores: { price: Number.NaN, safety: item.trust_score, condition: Number.NaN, components: Number.NaN },
+    values: {
+      price: { primary: `${item.price.toLocaleString('ko-KR')}원`, secondary: `평균 시세 ${item.market_price_avg.toLocaleString('ko-KR')}원` },
+      sellerReliability: { primary: item.market_price_avg > 0 ? `${Math.round(((item.price - item.market_price_avg) / item.market_price_avg) * 100)}%` : '미지원' },
+      condition: { primary: '미지원' },
+      defects: { primary: item.product_status.defects_found.join(', ') || '확인된 하자 없음' },
+      components: { primary: item.product_status.missing_components.length ? `누락: ${item.product_status.missing_components.join(', ')}` : '누락 정보 없음' },
+      tradeMethod: { primary: '미지원' },
+      sellerTrust: { primary: '미지원' },
+      risk: { primary: item.risk_level, secondary: item.scam_warnings.join(', ') || undefined },
+      needsCheck: { primary: `${item.product_status.defects_found.length + item.product_status.missing_components.length + item.scam_warnings.length}개 항목` },
+    },
+  })), [apiItems]);
+
+  const priorityLabel = PRIORITY_CONTENT[priority].tabLabel;
+  const content = {
+    tabLabel: priorityLabel,
+    title: recommendation || '비교할 상품을 2개 이상 추가해 주세요',
+    bullets: priority === 'safety'
+      ? (apiItems[0]?.scam_warnings.length ? apiItems[0].scam_warnings : ['확인된 위험 신호가 없습니다.'])
+      : priority === 'condition'
+        ? (apiItems[0]?.product_status.defects_found.length ? apiItems[0].product_status.defects_found : ['상태별 비교는 지원 예정인 기능입니다.'])
+        : priority === 'components'
+          ? (apiItems[0]?.product_status.missing_components.length ? apiItems[0].product_status.missing_components : ['전체 구성품 비교는 지원 예정인 기능입니다.'])
+          : apiItems[0] ? [`판매가 ${apiItems[0].price.toLocaleString('ko-KR')}원`, `평균 시세 ${apiItems[0].market_price_avg.toLocaleString('ko-KR')}원`] : [],
+  };
   const visibleItems = useMemo(
-    () => COMPARISON_ITEMS.filter((item) => visibleIds.includes(item.id)),
-    [visibleIds],
+    () => comparisonItems.filter((item) => visibleIds.includes(item.id)),
+    [comparisonItems, visibleIds],
   );
-  const hiddenItem = COMPARISON_ITEMS.find((item) => !visibleIds.includes(item.id));
+  const availableRecentItems = recentItems.filter(
+    (item) => !apiItems.some((candidate) => candidate.item_id === item.item_id),
+  );
+  const safestItem = [...apiItems].sort((a, b) => b.trust_score - a.trust_score)[0];
+  const lowestPriceItem = [...apiItems].sort((a, b) => a.price - b.price)[0];
+  const comparisonGuides = [
+    safestItem && { id: 'safe', description: '가장 안전하게 거래하고 싶다면', product: safestItem.title, score: safestItem.trust_score, icon: require('@/assets/images/compare/guide-safe.svg') },
+    lowestPriceItem && { id: 'price', description: '판매가가 가장 낮은 상품', product: lowestPriceItem.title, score: null, icon: require('@/assets/images/compare/guide-inspect.svg') },
+    safestItem && { id: 'trust', description: '현재 신뢰 점수가 가장 높은 상품', product: safestItem.title, score: safestItem.trust_score, icon: require('@/assets/images/compare/guide-best.svg') },
+  ].filter((guide): guide is NonNullable<typeof guide> => Boolean(guide));
 
   const removeItem = (id: string): void => {
     setVisibleIds((current) => current.filter((itemId) => itemId !== id));
+    void removeComparisonItem(Number(id));
   };
 
-  const addItem = (): void => {
-    if (hiddenItem) {
-      setVisibleIds((current) => [...current, hiddenItem.id].slice(0, 3));
+  const addItem = async (itemId: number): Promise<void> => {
+    if (apiItems.length >= 3 || addingItemId !== undefined) return;
+    setAddingItemId(itemId);
+    try {
+      await addComparisonItem(itemId);
+      await loadComparison();
+      setPickerVisible(false);
+    } finally {
+      setAddingItemId(undefined);
     }
   };
 
@@ -114,7 +200,7 @@ export default function CompareScreen() {
             {visibleItems.map((item, index) => (
               <View style={styles.productCard} key={item.id}>
                 <Text style={styles.cardCriterion}>
-                  {content.tabLabel} {item.scores[priority]}
+                  {content.tabLabel} {Number.isFinite(item.scores[priority]) ? item.scores[priority] : '미지원'}
                 </Text>
                 <View style={styles.cardMain}>
                   <Text
@@ -147,11 +233,11 @@ export default function CompareScreen() {
                 </Pressable>
               </View>
             ))}
-            {hiddenItem && visibleItems.length < 3 && (
+            {visibleItems.length < 3 && (
               <Pressable
                 accessibilityLabel="비교할 상품 추가"
                 accessibilityRole="button"
-                onPress={addItem}
+                onPress={() => setPickerVisible(true)}
                 style={({ pressed }) => [styles.addCard, pressed && styles.pressed]}>
                 <Image
                   contentFit="contain"
@@ -179,26 +265,48 @@ export default function CompareScreen() {
                   {COMPARISON_ROWS.map((row) => {
                     const value = item.values[row.key];
                     const emphasized = itemIndex === 0;
+                    const isRisk = row.key === 'risk';
+                    const riskExpanded = isRisk && expandedRiskId === item.id;
                     return (
                       <View
                         key={row.key}
-                        style={[styles.valueCell, emphasized && styles.valueCellEmphasized]}>
-                        <Text
-                          style={[
-                            styles.valueText,
-                            emphasized && styles.valueTextEmphasized,
-                          ]}>
-                          {value.primary}
-                        </Text>
-                        {value.secondary && (
+                        style={[
+                          styles.valueCell,
+                          emphasized && styles.valueCellEmphasized,
+                          riskExpanded && styles.riskCellExpanded,
+                        ]}>
+                        {isRisk && value.secondary ? (
+                          <Pressable
+                            accessibilityLabel={`${value.primary} 위험 신호 상세 ${riskExpanded ? '닫기' : '보기'}`}
+                            accessibilityRole="button"
+                            onPress={() => setExpandedRiskId((current) => current === item.id ? undefined : item.id)}
+                            style={({ pressed }) => [styles.riskButton, pressed && styles.pressed]}>
+                            <Text style={[styles.valueText, emphasized && styles.valueTextEmphasized]}>
+                              {value.primary}
+                            </Text>
+                          </Pressable>
+                        ) : (
                           <Text
                             style={[
-                              styles.valueNote,
-                              emphasized && styles.valueNoteEmphasized,
+                              styles.valueText,
+                              emphasized && styles.valueTextEmphasized,
                             ]}>
+                            {value.primary}
+                          </Text>
+                        )}
+                        {!isRisk && value.secondary && (
+                          <Text style={[styles.valueNote, emphasized && styles.valueNoteEmphasized]}>
                             {value.secondary}
                           </Text>
                         )}
+                        {riskExpanded && value.secondary ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => setExpandedRiskId(undefined)}
+                            style={styles.riskPopup}>
+                            <Text style={styles.riskPopupText}>{value.secondary}</Text>
+                          </Pressable>
+                        ) : null}
                       </View>
                     );
                   })}
@@ -218,13 +326,13 @@ export default function CompareScreen() {
         <View style={styles.guideSection}>
           <Text style={styles.guideTitle}>상황별{'\n'}선택 가이드</Text>
           <View>
-            {COMPARISON_GUIDES.map((guide, index) => (
+            {comparisonGuides.map((guide, index) => (
               <View key={guide.id} style={styles.guideItem}>
                 <View style={styles.timeline}>
                   <View style={styles.guideIconBox}>
                     <Image contentFit="contain" source={guide.icon} style={styles.guideIcon} />
                   </View>
-                  {index < COMPARISON_GUIDES.length - 1 && (
+                  {index < comparisonGuides.length - 1 && (
                     <View style={styles.timelineLine} />
                   )}
                 </View>
@@ -233,13 +341,50 @@ export default function CompareScreen() {
                   <Text style={styles.guideProduct}>{guide.product}</Text>
                 </View>
                 <View style={styles.guideScore}>
-                  <Text style={styles.guideScoreText}>{guide.score}점</Text>
+                  <Text style={styles.guideScoreText}>{guide.score === null ? '미지원' : `${guide.score}점`}</Text>
                 </View>
               </View>
             ))}
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setPickerVisible(false)}
+        transparent
+        visible={pickerVisible}>
+        <View style={styles.pickerOverlay}>
+          <Pressable style={styles.pickerScrim} onPress={() => setPickerVisible(false)} />
+          <SafeAreaView edges={['bottom']} style={styles.pickerSheet}>
+            <View style={styles.pickerHandle} />
+            <View style={styles.pickerHeader}>
+              <Text style={styles.pickerTitle}>최근 본 상품에서 추가</Text>
+              <Pressable hitSlop={8} onPress={() => setPickerVisible(false)}>
+                <Text style={styles.pickerClose}>닫기</Text>
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={styles.pickerList} showsVerticalScrollIndicator={false}>
+              {availableRecentItems.length ? availableRecentItems.map((item) => (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={addingItemId !== undefined}
+                  key={item.item_id}
+                  onPress={() => void addItem(item.item_id)}
+                  style={({ pressed }) => [styles.pickerItem, pressed && styles.pressed]}>
+                  <View style={styles.pickerItemCopy}>
+                    <Text numberOfLines={1} style={styles.pickerItemTitle}>{item.title}</Text>
+                    <Text style={styles.pickerItemPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
+                  </View>
+                  <Text style={styles.pickerAddText}>{addingItemId === item.item_id ? '추가 중' : '추가'}</Text>
+                </Pressable>
+              )) : (
+                <Text style={styles.pickerEmpty}>추가할 수 있는 최근 상품이 없습니다.</Text>
+              )}
+            </ScrollView>
+          </SafeAreaView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -396,12 +541,93 @@ const styles = StyleSheet.create({
   addCard: {
     width: 165,
     height: 141,
-    borderRadius: 11,
+    borderRadius: 12,
     backgroundColor: '#F4F6FA',
     alignItems: 'center',
     justifyContent: 'center',
   },
   plusIcon: { width: 24, height: 24 },
+  pickerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  pickerScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(33, 33, 33, 0.45)',
+  },
+  pickerSheet: {
+    maxHeight: '72%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#FFFFFF',
+    paddingTop: 10,
+  },
+  pickerHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D9DDE3',
+  },
+  pickerHeader: {
+    minHeight: 58,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pickerTitle: {
+    color: '#111727',
+    fontSize: 18,
+    fontWeight: '600',
+    lineHeight: 24,
+    letterSpacing: -0.3,
+  },
+  pickerClose: {
+    color: '#838C97',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  pickerList: {
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
+  pickerItem: {
+    minHeight: 72,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E8ED',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  pickerItemCopy: { flex: 1, gap: 6 },
+  pickerItemTitle: {
+    color: '#515760',
+    fontSize: 15,
+    fontWeight: '500',
+    lineHeight: 20,
+    letterSpacing: -0.3,
+  },
+  pickerItemPrice: {
+    color: '#838C97',
+    fontSize: 13,
+    lineHeight: 18,
+    letterSpacing: -0.3,
+  },
+  pickerAddText: {
+    color: '#8656C2',
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  pickerEmpty: {
+    paddingVertical: 36,
+    color: '#838C97',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
   table: {
     marginTop: 39,
     paddingHorizontal: 16,
@@ -452,6 +678,35 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   valueNoteEmphasized: { color: '#A597CC' },
+  riskCellExpanded: { zIndex: 20 },
+  riskButton: {
+    minWidth: 72,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  riskPopup: {
+    position: 'absolute',
+    top: 52,
+    left: -31,
+    zIndex: 30,
+    width: 164,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#111727',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  riskPopupText: {
+    color: '#515760',
+    fontSize: 12,
+    lineHeight: 17,
+    letterSpacing: -0.3,
+  },
   emptyValue: { color: '#838C97', fontSize: 13 },
   guideSection: {
     marginTop: 10,

@@ -100,6 +100,17 @@ export function AnalysisConfirmSheet({
     return Array.isArray(value) ? value.join(', ') : String(value ?? '');
   };
 
+  const normalizedValue = (source: Listing, field: EditableField): string => {
+    const value = source[field];
+    if (Array.isArray(value)) {
+      return value.map((item) => item.trim()).filter(Boolean).join(',');
+    }
+    return String(value ?? '').trim();
+  };
+
+  const isModified = (field: EditableField): boolean =>
+    normalizedValue(draft, field) !== normalizedValue(listing, field);
+
   const update = (field: EditableField, value: string): void => {
     if (field === 'price') {
       setDraft((current) => ({
@@ -195,13 +206,14 @@ export function AnalysisConfirmSheet({
             </View>
 
             <View style={styles.cardList}>
-              {fields.map(({ key, label, needsReview }) => {
+              {fields.map(({ key, label }) => {
+                const modified = isModified(key);
                 return (
                   <View
                     key={key}
-                    style={[styles.card, needsReview && styles.reviewCard]}
+                    style={[styles.card, modified && styles.reviewCard]}
                   >
-                    <View style={[styles.checkCircle, needsReview && styles.reviewCheckCircle]}>
+                    <View style={[styles.checkCircle, modified && styles.reviewCheckCircle]}>
                       <Image source={checkIcon} style={styles.checkIcon} contentFit="contain" />
                     </View>
 
@@ -209,11 +221,11 @@ export function AnalysisConfirmSheet({
                       <Text style={styles.label}>{label}</Text>
                       <Text
                         numberOfLines={2}
-                        style={[styles.value, needsReview && styles.reviewValue]}
+                        style={[styles.value, modified && styles.reviewValue]}
                       >
                         {key === 'price'
                           ? `${draft.price.toLocaleString('ko-KR')}원`
-                          : valueFor(key) || '정보 없음'}
+                          : valueFor(key) || '자동 확인 지원 예정'}
                       </Text>
                     </View>
 
@@ -249,7 +261,7 @@ export function AnalysisConfirmSheet({
               ]}
             >
               <Text style={styles.analyzeButtonText}>
-                {isAnalyzing ? '분석 중...' : '확인 후 분석 시작 →'}
+                {isAnalyzing ? '저장 중...' : '저장 후 결과 보기 →'}
               </Text>
             </Pressable>
           </LinearGradient>

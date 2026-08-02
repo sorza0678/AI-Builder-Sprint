@@ -3,6 +3,8 @@ import { Image, ImageSource } from 'expo-image';
 import { Modal, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
+import { useEffect, useState } from 'react';
+import { getAuthSession } from '@/src/storage/auth-session-storage';
 
 interface HomeSidebarProps {
   visible: boolean;
@@ -17,6 +19,7 @@ interface MenuRowProps {
     height: number;
   };
   href?: Href;
+  onPress?: () => void;
   onNavigate: (href: Href) => void;
 }
 
@@ -25,15 +28,16 @@ function MenuRow({
   icon,
   iconSize,
   href,
+  onPress,
   onNavigate,
 }: MenuRowProps) {
   return (
     <Pressable
-      accessibilityRole={href ? 'button' : undefined}
+      accessibilityRole={href || onPress ? 'button' : undefined}
       accessibilityLabel={label}
-      accessibilityState={{ disabled: !href }}
-      disabled={!href}
-      onPress={() => href && onNavigate(href)}
+      accessibilityState={{ disabled: !href && !onPress }}
+      disabled={!href && !onPress}
+      onPress={() => onPress ? onPress() : href && onNavigate(href)}
       style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}>
       <View style={styles.menuIconBox}>
         <Image source={icon} style={iconSize} contentFit="fill" />
@@ -46,6 +50,11 @@ function MenuRow({
 export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
   const { width } = useWindowDimensions();
   const panelWidth = Math.min(298, width * 0.828);
+  const [accountId, setAccountId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) void getAuthSession().then((session) => setAccountId(session?.accountId ?? null));
+  }, [visible]);
 
   const navigate = (href: Href): void => {
     onClose();
@@ -64,33 +73,36 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
           <View style={styles.content}>
             <View style={styles.profile}>
               <Text style={styles.greeting}>반가워요!</Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="로그인 화면으로 이동"
-                onPress={() => navigate('/login')}
-                style={({ pressed }) => [styles.loginLink, pressed && styles.pressed]}>
-                <Text style={styles.loginText}>로그인 해주세요</Text>
-                <Image
-                  source={require('@/assets/images/sidebar/login-chevron.png')}
-                  style={styles.loginChevron}
-                  contentFit="fill"
-                />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="마이페이지 미리보기"
-                onPress={() => navigate('/mypage-preview')}
-                style={({ pressed }) => [
-                  styles.temporaryMyPageButton,
-                  pressed && styles.pressed,
-                ]}>
-                <Text style={styles.temporaryMyPageText}>마이페이지 미리보기</Text>
-                <Image
-                  source={require('@/assets/images/sidebar/mypage-chevron.svg')}
-                  style={styles.temporaryMyPageChevron}
-                  contentFit="contain"
-                />
-              </Pressable>
+              {accountId ? (
+                <View style={styles.accountRow}>
+                  <Text style={styles.accountId}>{accountId}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="마이페이지로 이동"
+                    onPress={() => navigate('/mypage')}
+                    style={({ pressed }) => [styles.myPageLink, pressed && styles.pressed]}>
+                    <Text style={styles.myPageLinkText}>마이페이지로</Text>
+                    <Image
+                      source={require('@/assets/images/sidebar/login-chevron.png')}
+                      style={styles.loginChevron}
+                      contentFit="fill"
+                    />
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="로그인 화면으로 이동"
+                  onPress={() => navigate('/login')}
+                  style={({ pressed }) => [styles.loginLink, pressed && styles.pressed]}>
+                  <Text style={styles.loginText}>로그인 해주세요</Text>
+                  <Image
+                    source={require('@/assets/images/sidebar/login-chevron.png')}
+                    style={styles.loginChevron}
+                    contentFit="fill"
+                  />
+                </Pressable>
+              )}
             </View>
 
             <View style={styles.navigation}>
@@ -98,16 +110,14 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="찜한상품"
-                  // TODO: 찜한상품 화면 경로가 확정되면 연결
-                  onPress={() => undefined}
+                  onPress={() => navigate('/saved-listings')}
                   style={({ pressed }) => [styles.quickLink, styles.quickLinkDivider, pressed && styles.pressed]}>
                   <Text style={styles.quickLinkText}>찜한상품</Text>
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="분석기록"
-                  // TODO: 분석기록 화면 경로가 확정되면 연결
-                  onPress={() => undefined}
+                  onPress={() => navigate('/recent-analyses')}
                   style={({ pressed }) => [styles.quickLink, pressed && styles.pressed]}>
                   <Text style={styles.quickLinkText}>분석기록</Text>
                 </Pressable>
@@ -139,26 +149,28 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="비교기록"
                   icon={require('@/assets/images/sidebar/comparison-history.svg')}
                   iconSize={{ width: 22.715, height: 22.125 }}
+                  href="/comparison-history"
                   onNavigate={navigate}
                 />
                 <MenuRow
                   label="비교하기"
                   icon={require('@/assets/images/sidebar/compare.svg')}
                   iconSize={{ width: 23.667, height: 21.5 }}
-                  href="/compare"
+                  href="/compare?reset=1"
                   onNavigate={navigate}
                 />
                 <MenuRow
                   label="거래준비"
                   icon={require('@/assets/images/sidebar/clipboard-check.svg')}
                   iconSize={{ width: 19.333, height: 23.667 }}
-                  href="/trade/mock-analysis-1"
+                  href="/recent-analyses?mode=trade"
                   onNavigate={navigate}
                 />
                 <MenuRow
                   label="거래내역"
                   icon={require('@/assets/images/sidebar/receipt.svg')}
                   iconSize={{ width: 19.333, height: 23.667 }}
+                  href="/trade-records"
                   onNavigate={navigate}
                 />
                 <MenuRow
@@ -223,6 +235,34 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     gap: 10,
   },
+  accountRow: {
+    width: '100%',
+    minHeight: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  accountId: {
+    color: '#212121',
+    fontSize: 20,
+    fontWeight: '500',
+    lineHeight: 26,
+    letterSpacing: -0.3,
+    textDecorationLine: 'underline',
+  },
+  myPageLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  myPageLinkText: {
+    color: '#797979',
+    fontSize: 15,
+    fontWeight: '400',
+    lineHeight: 15,
+    letterSpacing: -0.3,
+  },
   loginText: {
     color: '#212121',
     fontSize: 20,
@@ -233,28 +273,6 @@ const styles = StyleSheet.create({
   loginChevron: {
     width: 14,
     height: 14,
-  },
-  temporaryMyPageButton: {
-    alignSelf: 'flex-start',
-    marginTop: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 16,
-    backgroundColor: '#F0F0FA',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  temporaryMyPageText: {
-    color: '#6850A4',
-    fontSize: 13,
-    fontWeight: '500',
-    lineHeight: 16.9,
-    letterSpacing: -0.3,
-  },
-  temporaryMyPageChevron: {
-    width: 12,
-    height: 12,
   },
   navigation: {
     gap: 24,

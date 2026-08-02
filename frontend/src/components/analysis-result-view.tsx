@@ -1,12 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Circle } from 'react-native-svg';
 import { Text } from '@/src/components/pretendard-text';
 
 import { AnalysisResult } from '@/src/types/marketplace';
+import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
+import { addComparisonItem } from '@/src/services/comparison-service';
 
 const assets = {
   arrow: require('@/assets/images/analysis-input/arrow-left.svg'),
@@ -19,8 +22,6 @@ const assets = {
   notice: require('@/assets/images/analysis-result/notice.svg'),
   salePrice: require('@/assets/images/analysis-result/sale-price.png'),
   scoreFace: require('@/assets/images/analysis-result/score-face.png'),
-  scoreRingBackground: require('@/assets/images/analysis-result/score-ring-background.svg'),
-  scoreRingProgress: require('@/assets/images/analysis-result/score-ring-progress.svg'),
   summarySearch: require('@/assets/images/analysis-result/summary-search.png'),
   unknown: require('@/assets/images/analysis-result/unknown.svg'),
 };
@@ -74,7 +75,13 @@ function TimelineGroup({ title, items, unknown = false, last = false }: Timeline
 }
 
 export function AnalysisResultView({ result }: AnalysisResultViewProps) {
+  const insets = useSafeAreaInsets();
   const [saved, setSaved] = useState(false);
+  const serverItemId = Number(result.id);
+  useEffect(() => {
+    if (!Number.isInteger(serverItemId)) return;
+    getBookmarks().then(({ items }) => setSaved(items.some((item) => item.item_id === serverItemId))).catch(() => undefined);
+  }, [serverItemId]);
   const priceDifference = result.marketPrice.average - result.listing.price;
   const discountRate =
     result.marketPrice.average > 0
@@ -82,10 +89,12 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
       : 0;
   const isCheaper = priceDifference >= 0;
   const score = useMemo(() => {
-    const conditionScores = { A: 90, B: 80, C: 68, D: 52 };
     const riskPenalty = { LOW: 0, MEDIUM: 8, HIGH: 18 };
-    return Math.max(0, conditionScores[result.conditionGrade] - riskPenalty[result.riskLevel]);
-  }, [result.conditionGrade, result.riskLevel]);
+    return result.trustScore ?? Math.max(0, 70 - riskPenalty[result.riskLevel]);
+  }, [result.riskLevel, result.trustScore]);
+  const ringRadius = 94;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringOffset = ringCircumference * (1 - Math.min(100, Math.max(0, score)) / 100);
   const considerationText = score >= 75 ? '구매 고려 가능' : score >= 60 ? '확인 후 고려' : '주의가 필요해요';
   const sellerItems = [
     ...result.listing.defects,
@@ -94,14 +103,12 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
       : '',
     result.listing.sellerDescription,
   ].filter(Boolean);
-  const photoItems = [
-    `${result.listing.color} 색상`,
-    `${result.listing.sizeOrCapacity} 규격`,
-    `${result.listing.usagePeriod} 사용`,
-  ];
+  const photoItems = result.conditionGradeSupported === false
+    ? ['이미지 상세 분석은 지원 예정인 기능입니다.']
+    : [`${result.listing.color} 색상`, `${result.listing.sizeOrCapacity} 규격`, `${result.listing.usagePeriod} 사용`];
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.header}>
         <Pressable
           accessibilityLabel="뒤로가기"
@@ -116,7 +123,11 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
           accessibilityRole="button"
           accessibilityState={{ selected: saved }}
           hitSlop={10}
-          onPress={() => setSaved((value) => !value)}
+          onPress={async () => {
+            if (!Number.isInteger(serverItemId)) return;
+            if (saved) await removeBookmark(serverItemId); else await addBookmark(serverItemId);
+            setSaved(!saved);
+          }}
           style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
           <Image
             source={saved ? assets.heartFilled : assets.heart}
@@ -127,7 +138,7 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 + insets.bottom }]}
         showsVerticalScrollIndicator={false}>
         <View style={styles.heroSection}>
           <View style={styles.heroCopy}>
@@ -139,16 +150,29 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
 
           <View style={styles.scoreArea}>
             <View style={styles.scoreRing}>
-              <Image
-                source={assets.scoreRingBackground}
-                style={styles.scoreRingImage}
-                contentFit="contain"
-              />
-              <Image
-                source={assets.scoreRingProgress}
-                style={styles.scoreRingImage}
-                contentFit="contain"
-              />
+              <Svg height={208} style={styles.scoreRingImage} viewBox="0 0 208 208" width={208}>
+                <Circle
+                  cx={104}
+                  cy={104}
+                  fill="none"
+                  r={ringRadius}
+                  stroke="#EEF1F7"
+                  strokeWidth={20}
+                />
+                <Circle
+                  cx={104}
+                  cy={104}
+                  fill="none"
+                  origin="104, 104"
+                  r={ringRadius}
+                  rotation={-90}
+                  stroke="#B797E1"
+                  strokeDasharray={`${ringCircumference} ${ringCircumference}`}
+                  strokeDashoffset={ringOffset}
+                  strokeLinecap="round"
+                  strokeWidth={20}
+                />
+              </Svg>
               <View style={styles.scoreCopy}>
                 <View style={styles.scoreFaceFrame}>
                   <Image source={assets.scoreFace} style={styles.scoreFace} contentFit="cover" />
@@ -243,7 +267,7 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
               />
               <DetailRow
                 label="예상 적정 시세"
-                value={`${result.marketPrice.min.toLocaleString('ko-KR')} –\n${formatPrice(result.marketPrice.max)}`}
+                value={result.marketPriceRangeSupported === false ? '미지원' : `${result.marketPrice.min.toLocaleString('ko-KR')} –\n${formatPrice(result.marketPrice.max)}`}
               />
               <DetailRow
                 label="예상 감가 요인"
@@ -302,11 +326,14 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
         colors={['rgba(255,255,255,0)', '#FFFFFF', '#FFFFFF']}
         locations={[0, 0.2, 1]}
         pointerEvents="box-none"
-        style={styles.bottomBar}>
+        style={[styles.bottomBar, { paddingBottom: 16 + insets.bottom }]}>
         <Pressable
           accessibilityLabel="매물 비교하기"
           accessibilityRole="button"
-          onPress={() => router.push('/compare')}
+          onPress={async () => {
+            if (Number.isInteger(serverItemId)) await addComparisonItem(serverItemId);
+            router.push('/compare');
+          }}
           style={({ pressed }) => [styles.compareButton, pressed && styles.pressed]}>
           <Image source={assets.compare} style={styles.compareIcon} contentFit="contain" />
         </Pressable>

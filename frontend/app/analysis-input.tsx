@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,10 +17,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AnalysisConfirmSheet } from '@/src/components/analysis-confirm-sheet';
 import { Text } from '@/src/components/pretendard-text';
 import { colors } from '@/src/constants/theme';
-import { createMockAnalysis } from '@/src/services/analysis-service';
-import { getRecentListings } from '@/src/services/listing-service';
+import { createAnalysis } from '@/src/services/analysis-service';
+import { ApiError } from '@/src/services/api-client';
+import { saveListingDetails } from '@/src/services/listing-service';
+import { cacheAnalysisResult } from '@/src/repositories/analysis-result-cache-repository';
 import { AnalysisDraft, SelectedImage } from '@/src/types/analysis-input';
-import { Listing } from '@/src/types/marketplace';
+import { AnalysisResult, Listing } from '@/src/types/marketplace';
 import { getUrlError, normalizeUrl } from '@/src/utils/url-validation';
 
 export default function AnalysisInputScreen() {
@@ -51,49 +54,44 @@ export default function AnalysisInputScreen() {
   const [inputError, setInputError] = useState<string | null>(null);
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [recent, setRecent] = useState<Listing[]>([]);
   const [pendingInput, setPendingInput] = useState<AnalysisDraft | null>(null);
+  const [pendingResult, setPendingResult] = useState<AnalysisResult>();
   const [sheetVisible, setSheetVisible] = useState(false);
 
-  const candidate = recent[0];
-
-  useEffect(() => {
-    let active = true;
-    getRecentListings()
-      .then((items) => {
-        if (active) {
-          setRecent(items);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setInputError('분석 준비 정보를 불러오지 못했습니다. 다시 시도해 주세요.');
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
   const draftListing = useMemo(() => {
-    if (!candidate || !pendingInput) {
+    if (!pendingResult) {
       return undefined;
     }
-    return {
-      ...candidate,
-      sourceUrl: pendingInput.url || candidate.sourceUrl,
-      imageUrl: pendingInput.image?.uri ?? candidate.imageUrl,
-    };
-  }, [candidate, pendingInput]);
+    return pendingResult.listing;
+  }, [pendingResult]);
 
-  const openConfirmation = (input: AnalysisDraft): void => {
-    if (!candidate) {
-      setInputError('분석 준비 정보를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
+  const openConfirmation = async (input: AnalysisDraft): Promise<void> => {
+    if (isSubmitting) return;
+    if (pendingResult?.listing.sourceUrl === input.url) {
+      setPendingInput(input);
+      setSheetVisible(true);
       return;
     }
     setPendingInput(input);
     setInputError(null);
-    setSheetVisible(true);
+    setIsSubmitting(true);
+    try {
+      const requestListing: Listing = {
+        id: 'pending', title: '', platform: '', sourceUrl: input.url,
+        imageUrl: input.image?.uri ?? null, price: 0, modelName: '', year: '',
+        sizeOrCapacity: '', color: '', usagePeriod: '', components: [], defects: [],
+        sellerDescription: '', saved: false,
+      };
+      const result = await createAnalysis(requestListing);
+      setPendingResult(result);
+      setSheetVisible(true);
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : '분석을 시작하지 못했습니다.';
+      setInputError(message);
+      Alert.alert('분석 요청 실패', message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const confirmUrl = (): void => {
@@ -104,7 +102,7 @@ export default function AnalysisInputScreen() {
     if (urlError || normalizedUrl.length === 0) {
       return;
     }
-    openConfirmation({ url: normalizedUrl, image: null });
+    void openConfirmation({ url: normalizedUrl, image: null });
   };
 
   const confirmInput = (): void => {
@@ -116,8 +114,12 @@ export default function AnalysisInputScreen() {
       return;
     }
 
+    if (selectedImage && !normalizedUrl) {
+      setInputError('이미지 분석은 아직 서버에서 지원하지 않습니다. 매물 URL을 함께 입력해 주세요.');
+      return;
+    }
     if (selectedImage) {
-      openConfirmation({ url: normalizedUrl, image: selectedImage });
+      void openConfirmation({ url: normalizedUrl, image: selectedImage });
       return;
     }
     confirmUrl();
@@ -159,6 +161,7 @@ export default function AnalysisInputScreen() {
         height: asset.height,
       };
       setSelectedImage(selectedImage);
+      setPendingResult(undefined);
     } catch {
       setInputError('이미지를 선택하지 못했습니다.');
       Alert.alert('이미지 선택 실패', '이미지를 선택하지 못했습니다. 다시 시도해 주세요.');
@@ -168,19 +171,21 @@ export default function AnalysisInputScreen() {
   };
 
   const submitAnalysis = async (listing: Listing): Promise<void> => {
-    if (!pendingInput || isSubmitting) {
+    if (!pendingInput || !pendingResult || isSubmitting) {
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // TODO: 실제 분석 API 연결 시 pendingInput과 확인된 listing 정보를 전송하도록 교체
-      const result = await createMockAnalysis(listing);
+      await saveListingDetails(listing);
+      const result = { ...pendingResult, listing };
+      await cacheAnalysisResult(result);
       setSheetVisible(false);
       router.replace(`/analysis/${result.id}`);
-    } catch {
-      setInputError('분석을 시작하지 못했습니다.');
-      Alert.alert('분석 요청 실패', '분석을 시작하지 못했습니다. 다시 시도해 주세요.');
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : '분석을 시작하지 못했습니다.';
+      setInputError(message);
+      Alert.alert('분석 요청 실패', message);
     } finally {
       setIsSubmitting(false);
     }
@@ -208,17 +213,17 @@ export default function AnalysisInputScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="입력 완료"
-            accessibilityState={{ disabled: !selectedImage && url.length === 0 }}
-            disabled={!selectedImage && url.length === 0}
+            accessibilityState={{ disabled: isSubmitting || (!selectedImage && url.length === 0) }}
+            disabled={isSubmitting || (!selectedImage && url.length === 0)}
             hitSlop={10}
             onPress={confirmInput}
             style={({ pressed }) => [styles.headerActionBox, pressed && styles.pressed]}>
             <Text
               style={[
                 styles.headerActionText,
-                !selectedImage && url.length === 0 && styles.headerActionTextDisabled,
+                (isSubmitting || (!selectedImage && url.length === 0)) && styles.headerActionTextDisabled,
               ]}>
-              완료
+              {isSubmitting ? '분석 중...' : '완료'}
             </Text>
           </Pressable>
         </View>
@@ -231,8 +236,10 @@ export default function AnalysisInputScreen() {
             autoCorrect={false}
             autoFocus={!selectedImage}
             keyboardType="url"
+            disableFullscreenUI
             onChangeText={(value) => {
               setUrl(value);
+              setPendingResult(undefined);
               setInputError(null);
             }}
             onSubmitEditing={confirmInput}
@@ -241,6 +248,7 @@ export default function AnalysisInputScreen() {
             returnKeyType="done"
             selectionColor="#8656C2"
             style={styles.input}
+            underlineColorAndroid="transparent"
             value={url}
           />
           {selectedImage && (
@@ -300,6 +308,18 @@ export default function AnalysisInputScreen() {
         </View>
       </KeyboardAvoidingView>
 
+      {isSubmitting && !sheetVisible ? (
+        <View accessibilityRole="progressbar" style={styles.analysisLoadingOverlay}>
+          <View style={styles.analysisLoadingCard}>
+            <ActivityIndicator color="#8656C2" size="large" />
+            <Text style={styles.analysisLoadingTitle}>매물 정보를 분석하고 있어요</Text>
+            <Text style={styles.analysisLoadingDescription}>
+              상품 정보와 시세, 위험 신호를 확인하는 중입니다.
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
       {draftListing && (
         <AnalysisConfirmSheet
           visible={sheetVisible}
@@ -323,6 +343,38 @@ const styles = StyleSheet.create({
   },
   root: {
     flex: 1,
+  },
+  analysisLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(17, 23, 39, 0.42)',
+    zIndex: 20,
+  },
+  analysisLoadingCard: {
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+  },
+  analysisLoadingTitle: {
+    marginTop: 4,
+    color: '#111727',
+    fontSize: 18,
+    fontWeight: '700',
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  analysisLoadingDescription: {
+    color: '#838C97',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   header: {
     height: 60,
@@ -371,14 +423,15 @@ const styles = StyleSheet.create({
   },
   input: {
     height: 73,
-    paddingVertical: 26,
+    paddingVertical: 0,
     paddingHorizontal: 0,
     color: '#424242',
     fontSize: 16,
-    fontWeight: '400',
     fontFamily: 'Pretendard-Regular',
+    includeFontPadding: false,
     lineHeight: 20,
     letterSpacing: -0.3,
+    textAlignVertical: 'center',
   },
   previewFrame: {
     width: 156,
