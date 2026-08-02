@@ -42,34 +42,33 @@ function ListingPreview({
   onToggleBookmark: (itemId: number, bookmarked: boolean) => Promise<void>;
 }) {
   return (
-    <Pressable
-      accessibilityLabel={`${item.title} 분석 기록 보기`}
-      accessibilityRole="button"
-      onPress={() => router.push(`/analysis/${item.item_id}`)}
-      style={({ pressed }) => [styles.listingCard, pressed && styles.pressed]}>
-      <View style={styles.listingInfo}>
-        <Text numberOfLines={1} style={styles.listingLocation}>
-          {item.location ?? item.platform ?? '지역 정보 없음'}
-        </Text>
-        <View style={styles.listingDetails}>
-          <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
-          <Text numberOfLines={1} style={styles.listingTitle}>
-            {item.title}
+    <View style={styles.listingCard}>
+      <Pressable
+        accessibilityLabel={`${item.title} 분석 기록 보기`}
+        accessibilityRole="button"
+        onPress={() => router.push(`/analysis/${item.item_id}`)}
+        style={({ pressed }) => [styles.listingCardBody, pressed && styles.pressed]}>
+        <View style={styles.listingInfo}>
+          <Text numberOfLines={1} style={styles.listingLocation}>
+            {item.location ?? item.platform ?? '지역 정보 없음'}
           </Text>
+          <View style={styles.listingDetails}>
+            <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
+            <Text numberOfLines={1} style={styles.listingTitle}>
+              {item.title}
+            </Text>
+          </View>
         </View>
-      </View>
-      <View style={styles.listingFooter}>
-        <Text style={styles.listingTime}>{formatRelativeTime(item.created_at)}</Text>
-      </View>
+        <View style={styles.listingFooter}>
+          <Text style={styles.listingTime}>{formatRelativeTime(item.created_at)}</Text>
+        </View>
+      </Pressable>
       <Pressable
         accessibilityLabel={bookmarked ? `${item.title} 찜 취소` : `${item.title} 찜하기`}
         accessibilityRole="button"
         accessibilityState={{ selected: bookmarked }}
         hitSlop={4}
-        onPress={(event) => {
-          event.stopPropagation();
-          void onToggleBookmark(item.item_id, bookmarked);
-        }}
+        onPress={() => void onToggleBookmark(item.item_id, bookmarked)}
         style={({ pressed }) => [styles.cardFavorite, pressed && styles.pressed]}>
         <Image
           contentFit="contain"
@@ -79,7 +78,7 @@ function ListingPreview({
           style={styles.cardFavoriteIcon}
         />
       </Pressable>
-    </Pressable>
+    </View>
   );
 }
 
@@ -131,7 +130,7 @@ function RecommendedListingRow({ item }: { item: RecommendedItem }) {
       accessibilityRole="button"
       disabled={!item.url}
       onPress={() => item.url && router.push({ pathname: '/analysis-input', params: { url: item.url } })}
-      style={({ pressed }) => [styles.listingCard, pressed && styles.pressed]}>
+      style={({ pressed }) => [styles.listingCard, styles.listingCardSpread, pressed && styles.pressed]}>
       <View style={styles.listingInfo}>
         <Text numberOfLines={1} style={styles.listingLocation}>
           {item.platform}
@@ -427,6 +426,12 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 12,
     backgroundColor: '#EFF0FF',
+  },
+  listingCardBody: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  listingCardSpread: {
     justifyContent: 'space-between',
   },
   listingInfo: {
