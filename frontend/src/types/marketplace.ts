@@ -23,12 +23,36 @@ export interface Listing {
   saved: boolean;
 }
 
+export type DefectSeverity = 'MINOR' | 'MODERATE' | 'MAJOR';
+
+export interface ConditionDefectView {
+  name: string;
+  severity: DefectSeverity | null;
+  evidence: string | null;
+}
+
+export interface ComparableListing {
+  title: string;
+  price: number;
+  platform: string;
+  url: string | null;
+}
+
 export interface AnalysisResult {
   id: string;
   listing: Listing;
-  marketPrice: { min: number; average: number; max: number };
+  marketPrice: {
+    min: number;
+    average: number;
+    max: number;
+    sampleCount: number;
+    calculatedAt: string;
+    confidence: number | null;
+  };
+  comparables: ComparableListing[];
   priceGrade: PriceGrade;
   conditionGrade: ConditionGrade;
+  conditionDefects: ConditionDefectView[];
   riskLevel: RiskLevel;
   warningSignals: string[];
   missingInformation: string[];

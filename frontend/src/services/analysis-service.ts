@@ -1,10 +1,9 @@
-import type { AnalysisResult, Listing, PriceGrade, RiskLevel } from '@/src/types/marketplace';
-import type { AnalysisDetailData, AnalyzeData, ApiRiskLevel } from './api-types';
+import type { AnalysisResult, ConditionGrade, Listing, PriceGrade } from '@/src/types/marketplace';
+import type { AnalysisDetailData, AnalyzeData } from './api-types';
 import { apiRequest, query } from './api-client';
 import { getOrCreateGuestId } from '@/src/storage/guest-id-storage';
 import { cacheAnalysisResult, getCachedAnalysisResult, removeCachedAnalysisResult } from '@/src/repositories/analysis-result-cache-repository';
-
-const riskMap: Record<ApiRiskLevel, RiskLevel> = { SAFE: 'LOW', WARNING: 'MEDIUM', DANGER: 'HIGH' };
+import { riskMap } from '@/src/utils/risk-level';
 
 function getPriceGrade(price: number, average: number): PriceGrade {
   if (average <= 0) return 'FAIR';
@@ -40,9 +39,23 @@ export function mapAnalyzeData(data: AnalyzeData, sourceUrl = '', imageUrl: stri
       min: data.market_price?.min ?? marketAverage,
       average: marketAverage,
       max: data.market_price?.max ?? marketAverage,
+      sampleCount: data.market_price?.sample_count ?? 0,
+      calculatedAt: data.market_price?.calculated_at ?? '',
+      confidence: data.market_price?.confidence ?? null,
     },
+    comparables: (data.comparables ?? []).map((comparable) => ({
+      title: comparable.title,
+      price: comparable.price,
+      platform: comparable.platform,
+      url: comparable.url,
+    })),
     priceGrade: getPriceGrade(listing.price, marketAverage),
-    conditionGrade: 'D',
+    conditionGrade: (data.condition?.grade as ConditionGrade | undefined) ?? 'D',
+    conditionDefects: (data.condition?.defects ?? []).map((defect) => ({
+      name: defect.name,
+      severity: defect.severity,
+      evidence: defect.evidence,
+    })),
     riskLevel: riskMap[data.risk_level],
     warningSignals: data.scam_warnings,
     missingInformation: data.product_status.missing_components,
@@ -51,7 +64,7 @@ export function mapAnalyzeData(data: AnalyzeData, sourceUrl = '', imageUrl: stri
     analyzedAt: 'created_at' in data ? (data as AnalysisDetailData).created_at : new Date().toISOString(),
     trustScore: data.trust_score,
     marketPriceRangeSupported: Boolean(data.market_price),
-    conditionGradeSupported: false,
+    conditionGradeSupported: Boolean(data.condition?.grade),
   };
 }
 

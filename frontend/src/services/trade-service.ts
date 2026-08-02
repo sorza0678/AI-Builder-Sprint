@@ -1,14 +1,25 @@
 import { apiRequest, query } from './api-client';
-import type { ApiTransactionDecision, ApiTransactionStage, TransactionItem } from './api-types';
+import type {
+  ApiTransactionDecision,
+  ApiTransactionStage,
+  ChecklistData,
+  InquiryScriptData,
+  PriceProposalData,
+  TransactionItem,
+} from './api-types';
 import { getOrCreateGuestId } from '@/src/storage/guest-id-storage';
 
 export async function getChecklist(item_id: number) {
   const user_id = await getOrCreateGuestId();
-  return apiRequest<{ item_id: number; checklist: string[] }>('/api/v1/checklist', { method: 'POST', body: JSON.stringify({ user_id, item_id }) });
+  return apiRequest<ChecklistData>('/api/v1/checklist', { method: 'POST', body: JSON.stringify({ user_id, item_id }) });
 }
 export async function getInquiryScript(item_id: number) {
   const user_id = await getOrCreateGuestId();
-  return apiRequest<{ item_id: number; script: string }>('/api/v1/inquiry-script', { method: 'POST', body: JSON.stringify({ user_id, item_id }) });
+  return apiRequest<InquiryScriptData>('/api/v1/inquiry-script', { method: 'POST', body: JSON.stringify({ user_id, item_id }) });
+}
+export async function fetchPriceProposal(item_id: number) {
+  const user_id = await getOrCreateGuestId();
+  return apiRequest<PriceProposalData>('/api/v1/price-proposal', { method: 'POST', body: JSON.stringify({ user_id, item_id }) });
 }
 export async function setTransaction(item_id: number, stage: ApiTransactionStage, decision: ApiTransactionDecision | null) {
   const user_id = await getOrCreateGuestId();
