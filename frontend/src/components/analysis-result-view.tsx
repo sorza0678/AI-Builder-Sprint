@@ -15,16 +15,25 @@ const assets = {
   arrow: require('@/assets/images/analysis-input/arrow-left.svg'),
   averagePrice: require('@/assets/images/analysis-result/average-price.png'),
   cheap: require('@/assets/images/analysis-result/cheap.svg'),
+  expensive: require('@/assets/images/analysis-result/expensive.svg'),
   check: require('@/assets/images/analysis-result/check.svg'),
   compare: require('@/assets/images/analysis-result/compare.svg'),
   heart: require('@/assets/images/analysis-result/heart.svg'),
   heartFilled: require('@/assets/images/analysis-result/heart-filled.svg'),
   notice: require('@/assets/images/analysis-result/notice.svg'),
   salePrice: require('@/assets/images/analysis-result/sale-price.png'),
-  scoreFace: require('@/assets/images/analysis-result/score-face.png'),
+  scoreFaceSafe: require('@/assets/images/analysis-result/score-face-safe-4x.png'),
+  scoreFaceWarning: require('@/assets/images/analysis-result/score-face-warning-4x.png'),
+  scoreFaceDanger: require('@/assets/images/analysis-result/score-face-danger-4x.png'),
   summarySearch: require('@/assets/images/analysis-result/summary-search.png'),
   unknown: require('@/assets/images/analysis-result/unknown.svg'),
 };
+
+const scoreFaceByRisk = {
+  LOW: assets.scoreFaceSafe,
+  MEDIUM: assets.scoreFaceWarning,
+  HIGH: assets.scoreFaceDanger,
+} as const;
 
 interface AnalysisResultViewProps {
   result: AnalysisResult;
@@ -87,7 +96,8 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
     result.marketPrice.average > 0
       ? Math.round((Math.abs(priceDifference) / result.marketPrice.average) * 100)
       : 0;
-  const isCheaper = priceDifference >= 0;
+  const isCheaper = priceDifference > 0;
+  const isExpensive = priceDifference < 0;
   const score = useMemo(() => {
     const riskPenalty = { LOW: 0, MEDIUM: 8, HIGH: 18 };
     return result.trustScore ?? Math.max(0, 70 - riskPenalty[result.riskLevel]);
@@ -95,7 +105,16 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
   const ringRadius = 94;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference * (1 - Math.min(100, Math.max(0, score)) / 100);
-  const considerationText = score >= 75 ? '구매 고려 가능' : score >= 60 ? '확인 후 고려' : '주의가 필요해요';
+  const considerationText = {
+    LOW: '구매 적극 추천',
+    MEDIUM: '구매 고려 가능',
+    HIGH: '구매 보류 권장',
+  }[result.riskLevel];
+  const summaryHeadingText = {
+    LOW: '구매하기 좋아요.',
+    MEDIUM: '구매를 고려해볼 만해요.',
+    HIGH: '구매는 신중히 결정해요.',
+  }[result.riskLevel];
   const sellerItems = [
     ...result.listing.defects,
     result.listing.components.length > 0
@@ -175,18 +194,34 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
               </Svg>
               <View style={styles.scoreCopy}>
                 <View style={styles.scoreFaceFrame}>
-                  <Image source={assets.scoreFace} style={styles.scoreFace} contentFit="cover" />
+                <Image
+                  source={scoreFaceByRisk[result.riskLevel]}
+                  style={styles.scoreFace}
+                  contentFit="fill"
+                />
                 </View>
                 <Text style={styles.scoreLabel}>{considerationText}</Text>
                 <Text style={styles.scoreValue}>{score}점</Text>
               </View>
             </View>
             <View style={styles.discountRow}>
-              <Image source={assets.cheap} style={styles.cheapIcon} contentFit="contain" />
-              <Text style={styles.discountText}>
-                <Text style={styles.discountAccent}>약 {discountRate}%</Text>{' '}
-                {isCheaper ? '저렴해요' : '비싸요'}
-              </Text>
+              {isCheaper || isExpensive ? (
+                <>
+                  <Image
+                    source={isExpensive ? assets.expensive : assets.cheap}
+                    style={styles.cheapIcon}
+                    contentFit="contain"
+                  />
+                  <Text style={styles.discountText}>
+                    <Text style={isExpensive ? styles.discountAccentExpensive : styles.discountAccent}>
+                      약 {discountRate}%
+                    </Text>{' '}
+                    {isExpensive ? '비싸요' : '저렴해요'}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.discountText}>평균가와 같아요</Text>
+              )}
             </View>
           </View>
 
@@ -194,13 +229,13 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
             <View style={styles.summaryHeading}>
               <Image source={assets.summarySearch} style={styles.summaryIcon} contentFit="cover" />
               <Text style={styles.summaryTitle}>
-                {score >= 75 ? '구매를 고려해볼 만해요.' : '조금 더 확인해보세요.'}
+                {summaryHeadingText}
               </Text>
             </View>
             <View style={styles.summaryBody}>
               <Text style={styles.summaryEyebrow}>정리해봤어요</Text>
               <Text style={styles.summaryDescription}>
-                가격은 시세보다 {isCheaper ? '저렴하나' : '높고'}{' '}
+                가격은 시세보다 {isCheaper ? '저렴하나' : isExpensive ? '높고' : '비슷하고'}{' '}
                 <Text style={styles.emphasis}>
                   {result.missingInformation[0] ?? '추가 정보 부족'}
                 </Text>
@@ -401,13 +436,14 @@ const styles = StyleSheet.create({
   scoreRingImage: { position: 'absolute', width: 208, height: 208 },
   scoreCopy: { alignItems: 'center', gap: 4, marginTop: 25 },
   scoreFaceFrame: { width: 45.43, height: 41, overflow: 'hidden' },
-  scoreFace: { position: 'absolute', left: -8.56, top: -10.86, width: 62.75, height: 62.76 },
+  scoreFace: { width: 45.43, height: 41 },
   scoreLabel: { color: '#838C97', fontSize: 16, lineHeight: 18, letterSpacing: -0.4 },
   scoreValue: { color: '#515760', fontSize: 28, fontWeight: '700', lineHeight: 30, letterSpacing: -0.4 },
   discountRow: { flexDirection: 'row', alignItems: 'center' },
   cheapIcon: { width: 22, height: 22 },
   discountText: { color: '#838C97', fontSize: 16, lineHeight: 18, letterSpacing: -0.4 },
   discountAccent: { color: '#268AFF', fontWeight: '700' },
+  discountAccentExpensive: { color: '#FF4D4D', fontWeight: '700' },
   summaryCard: { width: '100%', gap: 20, marginTop: 42, padding: 16, backgroundColor: '#F4F6FA', borderRadius: 8 },
   summaryHeading: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   summaryIcon: { width: 34, height: 34 },
