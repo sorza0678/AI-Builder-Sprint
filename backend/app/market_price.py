@@ -6,10 +6,11 @@
 """
 import re
 import statistics
+from datetime import datetime, timezone
 
 import httpx
 
-from app.scraper import UA, TIMEOUT
+from app.scraper import TIMEOUT, UA
 
 # 검색 결과에서 제외할 잡음 (액세서리·광고·부품)
 NOISE_WORDS = [
@@ -94,12 +95,41 @@ def _fallback_price(title: str, listing_price: int | None) -> int:
     return listing_price or 500_000
 
 
-def get_market_price(title: str, listing_price: int | None) -> tuple[int, bool]:
-    """제목 → (시세 평균, 실측 여부). 어떤 경우에도 예외를 던지지 않는다."""
+def get_market_detail(title: str, listing_price: int | None) -> dict:
+    """제목 → 시세 상세. 어떤 경우에도 예외를 던지지 않는다.
+
+    실측 성공: min/average/max/sample_count/confidence 전부 채움.
+    실측 실패(검색 불가·표본 부족): average만 폴백값, 나머지는 null —
+    프론트가 "표본 없는 평균가"를 실측처럼 신뢰하지 않도록 정직하게 구분한다.
+    confidence: 표본 30개면 1.0이 되는 단순 비율 (0~1).
+    """
+    calculated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         prices = search_prices(build_keyword(title))
-        if len(prices) >= MIN_SAMPLES:
-            return trimmed_mean(prices), True
     except Exception:
-        pass
-    return _fallback_price(title, listing_price), False
+        prices = []
+    if len(prices) >= MIN_SAMPLES:
+        return {
+            "min": min(prices),
+            "average": trimmed_mean(prices),
+            "max": max(prices),
+            "sample_count": len(prices),
+            "calculated_at": calculated_at,
+            "confidence": round(min(1.0, len(prices) / 30), 2),
+            "measured": True,
+        }
+    return {
+        "min": None,
+        "average": _fallback_price(title, listing_price),
+        "max": None,
+        "sample_count": len(prices),
+        "calculated_at": calculated_at,
+        "confidence": None,
+        "measured": False,
+    }
+
+
+def get_market_price(title: str, listing_price: int | None) -> tuple[int, bool]:
+    """제목 → (시세 평균, 실측 여부). get_market_detail의 요약 버전 (기존 호출부 호환)."""
+    detail = get_market_detail(title, listing_price)
+    return detail["average"], detail["measured"]

@@ -42,6 +42,8 @@ def test_history_returns_items_newest_first(client):
     item = data["items"][0]
     assert set(item.keys()) == {
         "item_id", "source_url", "title", "price", "trust_score", "risk_level", "created_at",
+        # 2026-08-02 추가 — 스크래핑으로 못 얻으면 null인 목록 표시용 필드
+        "platform", "thumbnail_url", "location",
     }
 
 
@@ -431,7 +433,10 @@ def test_listing_get_scoped_to_user(client):
 
     r = client.get("/api/v1/listing", params={"user_id": "u2", "item_id": item_id})
     assert r.status_code == 404
-    assert r.json()["error"]["code"] == "LISTING_NOT_FOUND"
+    # 2026-08-02 변경: 남의 매물에는 LISTING_NOT_FOUND("있긴 한데 상세 없음") 대신
+    # ITEM_NOT_FOUND — 존재 여부조차 노출하지 않는다. LISTING_NOT_FOUND 는 소유자 전용
+    # (위 test_listing_get_before_upsert_returns_listing_not_found 가 그 경로를 검증).
+    assert r.json()["error"]["code"] == "ITEM_NOT_FOUND"
 
 
 # ---------- FK 회귀 방지 (기존 버그: PRAGMA foreign_keys 미적용) ----------

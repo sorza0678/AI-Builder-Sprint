@@ -58,13 +58,27 @@ def get_db():
 
 
 def init_db():
-    """테이블 생성."""
+    """테이블 생성 + 기존 DB 마이그레이션."""
     with get_db() as conn:
         if _is_postgres():
             conn.cursor().execute(SCHEMA_POSTGRES.read_text(encoding="utf-8"))
         else:
             conn.executescript(SCHEMA.read_text(encoding="utf-8"))
         conn.commit()
+        # 마이그레이션: 스키마 파일의 CREATE TABLE IF NOT EXISTS 는 "이미 있는" 테이블을
+        # 바꾸지 못하므로, 예전 DB에 없는 컬럼은 여기서 추가한다.
+        # 이미 있으면 "duplicate column" 에러가 나는데 그건 정상이라 무시.
+        for ddl in (
+            "ALTER TABLE analysis_history ADD COLUMN deleted_at TIMESTAMP",
+            "ALTER TABLE users ADD COLUMN password_hash TEXT",       # 인증 (P0-3)
+            "ALTER TABLE users ADD COLUMN nickname TEXT",
+            "ALTER TABLE users ADD COLUMN migrated_to TEXT",         # guest 이전 후 재사용 방지 (P0-4)
+        ):
+            try:
+                _execute(conn, ddl)
+                conn.commit()
+            except Exception:
+                conn.rollback()
 
 
 def ensure_user(user_id: str):
@@ -116,11 +130,15 @@ def save_analysis(
 
 
 def get_analysis_by_id(analysis_id: int) -> dict | None:
-    """분석 결과 조회 (raw_analysis_json에서 full data 파싱)."""
+    """분석 결과 조회 (raw_analysis_json에서 full data 파싱). 삭제된 기록은 없는 것으로 취급.
+
+    ⚠️ 소유자를 확인하지 않는다 — 남의 매물도 반환한다. 외부 요청 처리에는 절대 쓰지 말고
+    반드시 get_owned_analysis / user_owns_analysis 를 써라 (IDOR 방지). 내부 재사용 전용.
+    """
     with get_db() as conn:
         row = _execute(
             conn,
-            "SELECT raw_analysis_json FROM analysis_history WHERE id = ?",
+            "SELECT raw_analysis_json FROM analysis_history WHERE id = ? AND deleted_at IS NULL",
             (analysis_id,),
         ).fetchone()
     if not row:
@@ -128,13 +146,72 @@ def get_analysis_by_id(analysis_id: int) -> dict | None:
     return json.loads(row["raw_analysis_json"])
 
 
-def get_multiple_analyses(analysis_ids: list[int]) -> list[dict]:
-    """복수 분석 결과 조회."""
+def user_owns_analysis(user_id: str, analysis_id: int) -> bool:
+    """분석이 이 사용자 소유이고 살아있는지 — 찜/비교/체크리스트 등 모든 참조의 소유권 게이트."""
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            "SELECT 1 FROM analysis_history WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+            (analysis_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
+def get_owned_analysis(user_id: str, analysis_id: int) -> dict | None:
+    """소유권 검증 포함 분석 조회 — 남의 것/삭제된 것은 None (존재 여부도 노출 안 함)."""
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            "SELECT raw_analysis_json FROM analysis_history WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+            (analysis_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    return json.loads(row["raw_analysis_json"])
+
+
+def _apply_listing_override(data: dict, ld_row) -> dict:
+    """사용자가 화면2(/listing)에서 확인/수정한 값이 있으면 AI 원본보다 우선 적용.
+
+    listing_details 행이 존재한다 = 사용자가 그 매물 정보를 "확정"했다는 뜻이므로
+    title/price/defects 는 통째로 사용자 값으로 교체한다 (빈 배열도 '하자 없음 확정'으로 존중).
+    """
+    if not ld_row:
+        return data
+    out = {**data, "title": ld_row["title"], "price": ld_row["price"]}
+    product_status = {**out.get("product_status", {"defects_found": [], "missing_components": []})}
+    product_status["defects_found"] = json.loads(ld_row["defects_json"])
+    out["product_status"] = product_status
+    return out
+
+
+def _get_listing_rows(user_id: str, analysis_ids: list[int]) -> dict[int, dict]:
+    """analysis_id → listing_details 행 매핑 (한 번의 쿼리로)."""
+    if not analysis_ids:
+        return {}
+    placeholders = ",".join("?" for _ in analysis_ids)
+    with get_db() as conn:
+        rows = _execute(
+            conn,
+            f"SELECT * FROM listing_details WHERE user_id = ? AND analysis_id IN ({placeholders})",
+            (user_id, *analysis_ids),
+        ).fetchall()
+    return {row["analysis_id"]: row for row in rows}
+
+
+def get_multiple_analyses(analysis_ids: list[int], user_id: str | None = None) -> list[dict]:
+    """복수 분석 결과 조회. user_id를 주면 소유한 것만 반환 + 수정값(listing_details) 우선 반영.
+
+    user_id를 주면 소유권 필터가 걸린다 — compare 등에서 남의 매물을 섞어 조회하는 IDOR 방지.
+    """
     results = []
     for aid in analysis_ids:
-        data = get_analysis_by_id(aid)
+        data = get_owned_analysis(user_id, aid) if user_id else get_analysis_by_id(aid)
         if data:
             results.append(data)
+    if user_id and results:
+        ld_map = _get_listing_rows(user_id, [r["item_id"] for r in results])
+        results = [_apply_listing_override(r, ld_map.get(r["item_id"])) for r in results]
     return results
 
 
@@ -167,15 +244,52 @@ def unbookmark(user_id: str, analysis_id: int) -> bool:
     return cursor.rowcount > 0
 
 
-def get_bookmarks(user_id: str) -> list[dict]:
-    """찜 목록 → analyze data 형태 배열 (최신순)."""
+def _collection_items(user_id: str, table: str, added_at_key: str) -> list[dict]:
+    """찜/비교후보 공통 조회 — 분석 원본 + 사용자 수정값 + 목록 추가 시각/원본 URL.
+
+    LEFT JOIN listing_details: 사용자 수정값이 "있으면" 붙고, 없으면 NULL(→ 원본 유지).
+    JOIN analysis_history 의 deleted_at IS NULL 조건으로 삭제된 분석은 목록에서 자동 제외.
+    JOIN 에 a.user_id = c.user_id 를 걸어, 혹시 남의 analysis_id 를 가리키는 행이 있어도
+    그 내용이 새지 않게 방어한다 (소유권은 추가 시점에도 검증하지만 조회에서 이중 방어).
+    """
     with get_db() as conn:
         rows = _execute(
             conn,
-            "SELECT analysis_id FROM bookmarks WHERE user_id = ? ORDER BY id DESC",
+            f"""
+            SELECT c.analysis_id, c.created_at AS added_at,
+                   a.source_url, a.raw_analysis_json,
+                   ld.title AS ld_title, ld.price AS ld_price, ld.defects_json AS ld_defects_json
+            FROM {table} c
+            JOIN analysis_history a
+                   ON a.id = c.analysis_id AND a.user_id = c.user_id AND a.deleted_at IS NULL
+            LEFT JOIN listing_details ld
+                   ON ld.analysis_id = c.analysis_id AND ld.user_id = c.user_id
+            WHERE c.user_id = ?
+            ORDER BY c.id DESC
+            """,
             (user_id,),
         ).fetchall()
-    return get_multiple_analyses([row["analysis_id"] for row in rows])
+    items = []
+    for row in rows:
+        data = json.loads(row["raw_analysis_json"])
+        if row["ld_title"] is not None:
+            data = _apply_listing_override(
+                data,
+                {"title": row["ld_title"], "price": row["ld_price"], "defects_json": row["ld_defects_json"]},
+            )
+        items.append(
+            {
+                **data,
+                "source_url": row["source_url"],
+                added_at_key: _iso_z(row["added_at"]),
+            }
+        )
+    return items
+
+
+def get_bookmarks(user_id: str) -> list[dict]:
+    """찜 목록 (최신순) — 사용자 수정값 반영 + bookmarked_at/source_url 포함."""
+    return _collection_items(user_id, "bookmarks", "bookmarked_at")
 
 
 def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]:
@@ -186,7 +300,7 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
     with get_db() as conn:
         total = _execute(
             conn,
-            "SELECT COUNT(*) as cnt FROM analysis_history WHERE user_id = ?",
+            "SELECT COUNT(*) as cnt FROM analysis_history WHERE user_id = ? AND deleted_at IS NULL",
             (user_id,),
         ).fetchone()["cnt"]
 
@@ -194,33 +308,41 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
         rows = _execute(
             conn,
             """
-            SELECT id, source_url, title, price, trust_score, risk_level,
-                   raw_analysis_json, created_at
-            FROM analysis_history
-            WHERE user_id = ?
-            ORDER BY id DESC
+            SELECT a.id, a.source_url, a.title, a.price, a.trust_score, a.risk_level,
+                   a.raw_analysis_json, a.created_at,
+                   ld.title AS ld_title, ld.price AS ld_price
+            FROM analysis_history a
+            LEFT JOIN listing_details ld
+                   ON ld.analysis_id = a.id AND ld.user_id = a.user_id
+            WHERE a.user_id = ? AND a.deleted_at IS NULL
+            ORDER BY a.id DESC
             LIMIT ? OFFSET ?
             """,
             (user_id, size, offset),
         ).fetchall()
 
-    return (
-        [
+    items = []
+    for row in rows:
+        raw = json.loads(row["raw_analysis_json"])
+        items.append(
             {
                 "item_id": row["id"],
                 "source_url": row["source_url"],
-                "title": row["title"],
-                "price": row["price"],
+                # 사용자가 화면2에서 수정한 값이 있으면(ld_title NOT NULL) 그 값 우선
+                "title": row["ld_title"] if row["ld_title"] is not None else row["title"],
+                "price": row["ld_price"] if row["ld_price"] is not None else row["price"],
                 "trust_score": row["trust_score"],
                 "risk_level": row["risk_level"],
+                # 스크래핑으로 수집됐을 때만 존재 — 없으면 null (지어내지 않는다)
+                "platform": raw.get("platform"),
+                "thumbnail_url": raw.get("thumbnail_url"),
+                "location": raw.get("location"),
                 # 항상 UTC — 'Z'를 붙여 aware datetime 으로 내보내야
                 # 프론트(JS Date)가 로컬시간으로 올바르게 변환한다
                 "created_at": _iso_z(row["created_at"]),
             }
-            for row in rows
-        ],
-        total,
-    )
+        )
+    return items, total
 
 
 def upsert_transaction_status(
@@ -255,9 +377,12 @@ def get_transactions(
     """거래 상태 목록 (analysis_history와 조인, 최신 변경순). stage/decision 각각 생략 시 미필터."""
     query = """
         SELECT t.analysis_id, t.stage, t.decision, t.updated_at,
-               a.title, a.price, a.trust_score, a.risk_level
+               a.title, a.price, a.trust_score, a.risk_level,
+               ld.title AS ld_title, ld.price AS ld_price
         FROM transaction_status t
-        JOIN analysis_history a ON a.id = t.analysis_id
+        JOIN analysis_history a ON a.id = t.analysis_id AND a.deleted_at IS NULL
+        LEFT JOIN listing_details ld
+               ON ld.analysis_id = t.analysis_id AND ld.user_id = t.user_id
         WHERE t.user_id = ?
     """
     params: list = [user_id]
@@ -273,8 +398,9 @@ def get_transactions(
     return [
         {
             "item_id": row["analysis_id"],
-            "title": row["title"],
-            "price": row["price"],
+            # 사용자 수정값 우선 (화면2에서 확정한 제목/가격)
+            "title": row["ld_title"] if row["ld_title"] is not None else row["title"],
+            "price": row["ld_price"] if row["ld_price"] is not None else row["price"],
             "trust_score": row["trust_score"],
             "risk_level": row["risk_level"],
             "stage": row["stage"],
@@ -315,14 +441,8 @@ def remove_comparison_item(user_id: str, analysis_id: int) -> bool:
 
 
 def get_comparison_items(user_id: str) -> list[dict]:
-    """비교 후보 목록 → analyze data 형태 배열 (최신순)."""
-    with get_db() as conn:
-        rows = _execute(
-            conn,
-            "SELECT analysis_id FROM comparison_items WHERE user_id = ? ORDER BY id DESC",
-            (user_id,),
-        ).fetchall()
-    return get_multiple_analyses([row["analysis_id"] for row in rows])
+    """비교 후보 목록 (최신순) — 사용자 수정값 반영 + comparison_added_at/source_url 포함."""
+    return _collection_items(user_id, "comparison_items", "comparison_added_at")
 
 
 def upsert_listing_details(
@@ -412,17 +532,29 @@ def get_mypage_summary(user_id: str, recent_limit: int = 5) -> dict:
     """마이페이지 상단 요약 — 기존/신규 테이블 COUNT + 최근 분석 목록(기존 get_history 재사용)."""
     with get_db() as conn:
         analysis_count = _execute(
-            conn, "SELECT COUNT(*) c FROM analysis_history WHERE user_id = ?", (user_id,)
+            conn,
+            "SELECT COUNT(*) c FROM analysis_history WHERE user_id = ? AND deleted_at IS NULL",
+            (user_id,),
         ).fetchone()["c"]
         bookmark_count = _execute(
-            conn, "SELECT COUNT(*) c FROM bookmarks WHERE user_id = ?", (user_id,)
+            conn,
+            """SELECT COUNT(*) c FROM bookmarks b
+               JOIN analysis_history a ON a.id = b.analysis_id AND a.deleted_at IS NULL
+               WHERE b.user_id = ?""",
+            (user_id,),
         ).fetchone()["c"]
         comparison_count = _execute(
-            conn, "SELECT COUNT(*) c FROM comparison_items WHERE user_id = ?", (user_id,)
+            conn,
+            """SELECT COUNT(*) c FROM comparison_items ci
+               JOIN analysis_history a ON a.id = ci.analysis_id AND a.deleted_at IS NULL
+               WHERE ci.user_id = ?""",
+            (user_id,),
         ).fetchone()["c"]
         transaction_completed_count = _execute(
             conn,
-            "SELECT COUNT(*) c FROM transaction_status WHERE user_id = ? AND stage = 'COMPLETED'",
+            """SELECT COUNT(*) c FROM transaction_status t
+               JOIN analysis_history a ON a.id = t.analysis_id AND a.deleted_at IS NULL
+               WHERE t.user_id = ? AND t.stage = 'COMPLETED'""",
             (user_id,),
         ).fetchone()["c"]
     recent_analyses, _ = get_history(user_id, page=1, size=recent_limit)
@@ -433,3 +565,222 @@ def get_mypage_summary(user_id: str, recent_limit: int = 5) -> dict:
         "transaction_completed_count": transaction_completed_count,
         "recent_analyses": recent_analyses,
     }
+
+
+# ---------- 분석 단건 조회 / 삭제 (Backend B, P0-2·P1-7) ----------
+
+def get_analysis_full(user_id: str, analysis_id: int) -> dict | None:
+    """분석 단건 상세 — 소유권 검증 포함 (본인 것 + 삭제 안 된 것만).
+
+    다른 사용자의 item_id로 조회하면 "없음"과 똑같이 None을 반환한다
+    (존재 여부조차 알려주지 않아야 남의 데이터를 떠볼 수 없다).
+    """
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            """SELECT id, source_url, raw_analysis_json, created_at
+               FROM analysis_history
+               WHERE id = ? AND user_id = ? AND deleted_at IS NULL""",
+            (analysis_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    data = json.loads(row["raw_analysis_json"])
+    listing = get_listing_details(user_id, analysis_id)
+    if listing:
+        # 상단 표시값은 사용자 수정값 우선, listing_details 객체는 원본 그대로 함께 제공
+        data = {**data, "title": listing["title"], "price": listing["price"]}
+        product_status = {**data.get("product_status", {"defects_found": [], "missing_components": []})}
+        product_status["defects_found"] = listing["defects"]
+        data["product_status"] = product_status
+    return {
+        **data,
+        "item_id": row["id"],
+        "source_url": row["source_url"],
+        "listing_details": listing,
+        "created_at": _iso_z(row["created_at"]),
+        "updated_at": listing["updated_at"] if listing else None,
+    }
+
+
+def delete_analysis(user_id: str, analysis_id: int) -> bool:
+    """분석 기록 soft delete — 실제 행은 남기고 deleted_at만 찍는다 (복구·정합성 대비).
+
+    모든 조회 쿼리가 deleted_at IS NULL 조건을 걸므로, 찜/비교후보/거래 목록에서도
+    같이 사라진다 (연결 데이터를 지우지 않아도 됨). 본인 것만 삭제 가능.
+    """
+    with get_db() as conn:
+        cursor = _execute(
+            conn,
+            """UPDATE analysis_history SET deleted_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND user_id = ? AND deleted_at IS NULL""",
+            (analysis_id, user_id),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+# ---------- 비교 기록 (Backend B, P1-6) ----------
+
+def save_comparison_history(
+    user_id: str, item_ids: list[int], recommendation: str, snapshot: list[dict]
+) -> int:
+    """비교 실행 기록 저장 — 당시의 제목·가격·점수 snapshot을 그대로 보존 → comparison_id 반환."""
+    ensure_user(user_id)
+    with get_db() as conn:
+        cursor = _execute(
+            conn,
+            """INSERT INTO comparison_history (user_id, item_ids_json, recommendation, snapshot_json)
+               VALUES (?, ?, ?, ?) RETURNING id""",
+            (user_id, json.dumps(item_ids), recommendation, json.dumps(snapshot)),
+        )
+        comparison_id = cursor.fetchone()["id"]
+        conn.commit()
+    return comparison_id
+
+
+def _comparison_history_row_to_dict(row) -> dict:
+    return {
+        "comparison_id": row["id"],
+        "item_ids": json.loads(row["item_ids_json"]),
+        "recommendation": row["recommendation"],
+        "items": json.loads(row["snapshot_json"]),
+        "created_at": _iso_z(row["created_at"]),
+    }
+
+
+def get_comparison_history_list(user_id: str) -> list[dict]:
+    """비교 기록 목록 (최신순)."""
+    with get_db() as conn:
+        rows = _execute(
+            conn,
+            "SELECT * FROM comparison_history WHERE user_id = ? ORDER BY id DESC",
+            (user_id,),
+        ).fetchall()
+    return [_comparison_history_row_to_dict(row) for row in rows]
+
+
+def get_comparison_history(user_id: str, comparison_id: int) -> dict | None:
+    """비교 기록 단건 — 본인 것만 (남의 id는 없음과 동일하게 None)."""
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            "SELECT * FROM comparison_history WHERE id = ? AND user_id = ?",
+            (comparison_id, user_id),
+        ).fetchone()
+    return _comparison_history_row_to_dict(row) if row else None
+
+
+def delete_comparison_history(user_id: str, comparison_id: int) -> bool:
+    """비교 기록 삭제 (단순 로그라 hard delete). 본인 것만."""
+    with get_db() as conn:
+        cursor = _execute(
+            conn,
+            "DELETE FROM comparison_history WHERE id = ? AND user_id = ?",
+            (comparison_id, user_id),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+# ---------- 인증 (Backend B, P0-3) ----------
+
+def create_account(user_id: str, password_hash: str, nickname: str | None) -> bool:
+    """실계정 생성 → 성공 여부. 이미 존재하는 user_id면 False (guest 행 탈취 방지 — 어떤 기존 id도 재사용 불가)."""
+    with get_db() as conn:
+        existing = _execute(conn, "SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if existing:
+            return False
+        _execute(
+            conn,
+            "INSERT INTO users (id, password_hash, nickname) VALUES (?, ?, ?)",
+            (user_id, password_hash, nickname),
+        )
+        conn.commit()
+    return True
+
+
+def get_user_auth(user_id: str) -> dict | None:
+    """로그인 검증용 사용자 행 (없으면 None)."""
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            "SELECT id, password_hash, nickname, migrated_to FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "user_id": row["id"],
+        "password_hash": row["password_hash"],
+        "nickname": row["nickname"],
+        "migrated_to": row["migrated_to"],
+    }
+
+
+# ---------- guest 데이터 계정 이전 (Backend B, P0-4) ----------
+
+class MigrateError(Exception):
+    """code: CANNOT_MIGRATE_ACCOUNT | ALREADY_MIGRATED"""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+def migrate_guest(account_id: str, guest_id: str) -> dict:
+    """guest의 모든 기록을 실계정으로 이전 — 단일 트랜잭션, 멱등.
+
+    안전 규칙:
+    - guest 행에 password_hash가 있으면(=실계정) 이전 거부 — 남의 계정 데이터 탈취 방지.
+    - 이미 다른 계정으로 이전된 guest면 거부, 같은 계정으로 재요청이면 성공(이동 0건) — 멱등성.
+    - 이전 후 users.migrated_to 를 찍어 guest id 재사용(로그인·재이전)을 막는다.
+
+    소유권 불변식 덕분에 UNIQUE(user_id, analysis_id) 충돌은 정상 흐름에선 불가능
+    (guest의 찜/비교/거래는 전부 guest 자신의 분석을 가리키므로, 계정 쪽에 같은
+    analysis_id 행이 미리 존재할 수 없다). 만약을 대비해 전체를 롤백으로 감싼다.
+    """
+    ensure_user(account_id)
+    with get_db() as conn:
+        guest = _execute(
+            conn,
+            "SELECT password_hash, migrated_to FROM users WHERE id = ?",
+            (guest_id,),
+        ).fetchone()
+        empty = {t: 0 for t in (
+            "analysis_history", "listing_details", "bookmarks",
+            "comparison_items", "transaction_status", "comparison_history",
+        )}
+        if not guest:
+            return empty  # 이전할 게 없음 — 멱등 성공
+        if guest["password_hash"]:
+            raise MigrateError("CANNOT_MIGRATE_ACCOUNT", "실계정은 guest 이전 대상이 될 수 없습니다.")
+        if guest["migrated_to"] and guest["migrated_to"] != account_id:
+            raise MigrateError("ALREADY_MIGRATED", "이미 다른 계정으로 이전된 guest 입니다.")
+
+        try:
+            counts = {}
+            for table in (
+                "analysis_history", "listing_details", "bookmarks",
+                "comparison_items", "transaction_status", "comparison_history",
+            ):
+                counts[table] = _execute(
+                    conn,
+                    f"UPDATE {table} SET user_id = ? WHERE user_id = ?",
+                    (account_id, guest_id),
+                ).rowcount
+            _execute(
+                conn, "UPDATE users SET migrated_to = ? WHERE id = ?", (account_id, guest_id)
+            )
+            conn.commit()
+            return counts
+        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+            # 계정과 guest가 같은 analysis_id 를 각자 찜/비교/거래에 담고 있으면
+            # UNIQUE(user_id, analysis_id) 충돌 — 불투명한 500 대신 명확한 409 로 변환.
+            # (소유권 검증으로 정상 경로에선 발생 불가하지만 이중 방어)
+            conn.rollback()
+            raise MigrateError("MIGRATE_CONFLICT", "계정과 guest에 중복된 항목이 있어 이전할 수 없습니다.")
+        except Exception:
+            conn.rollback()
+            raise

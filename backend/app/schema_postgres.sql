@@ -5,7 +5,10 @@
 
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    password_hash TEXT,   -- NULL = 비회원(guest)·암묵 생성 유저, 값 있음 = 실계정 (P0-3)
+    nickname TEXT,
+    migrated_to TEXT      -- guest 데이터를 실계정으로 이전한 뒤 표시 — 재사용 방지 (P0-4)
 );
 
 CREATE TABLE IF NOT EXISTS analysis_history (
@@ -18,6 +21,7 @@ CREATE TABLE IF NOT EXISTS analysis_history (
     risk_level TEXT NOT NULL CHECK (risk_level IN ('SAFE', 'WARNING', 'DANGER')),
     raw_analysis_json TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,  -- soft delete: 값이 있으면 "삭제된" 기록 (모든 조회에서 제외)
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -85,3 +89,17 @@ CREATE TABLE IF NOT EXISTS listing_details (
 );
 
 CREATE INDEX IF NOT EXISTS idx_listing_details_user ON listing_details(user_id);
+
+-- Backend B: 실행된 비교 기록 (비교 후보 목록과 별개 — "비교를 실행했던 과거"의 보존)
+-- snapshot_json: 비교 당시의 제목·가격·점수를 그대로 저장 (이후 상품 정보가 바뀌어도 기록은 불변)
+CREATE TABLE IF NOT EXISTS comparison_history (
+    id BIGSERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    item_ids_json TEXT NOT NULL,
+    recommendation TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comparison_history_user ON comparison_history(user_id);

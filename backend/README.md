@@ -283,3 +283,38 @@ A가 임시 제공하던 것을 B로 이관 완료(2026-08-02, 순수 코드 이
 "SQLite ↔ Postgres(Supabase) 이중 백엔드" 절 참고.
 
 ⚠️ 아직 실제 Supabase 인스턴스로 스모크 테스트 전 — `init_db()`의 다중 SQL문 실행 검증이 남아있음.
+
+## 2026-08-02 확장 — 프론트 요구사항 문서 반영 (A·B)
+
+> 상세 계약·정책은 `backend/AGENTS.md`의 "2026-08-02 확장" 절이 원본. 여기는 요약.
+
+**사용자 수정값 전면 반영 (P0-1)**: `/listing` 수정값(제목·가격·하자)이 `/history`·`/bookmark`·
+`/comparison`·`/compare`·`/transaction`·`/mypage`에 우선 적용됨 (조회 시 LEFT JOIN — 원본 비파괴).
+
+**신규 API**:
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/v1/analysis/{item_id}?user_id=` | 분석 단건 상세 (소유권 검증, listing_details 포함) |
+| DELETE | `/api/v1/analysis/{item_id}?user_id=` | 분석 삭제 (soft delete — 모든 목록에서 함께 제외) |
+| POST | `/api/v1/price-proposal` | 가격 제안 — 표본 부족 시 `target_price: null` |
+| POST/GET | `/api/v1/comparison-history` | 비교 실행 기록 (당시 값 snapshot 보존) |
+| GET/DELETE | `/api/v1/comparison-history/{id}` | 비교 기록 단건 조회/삭제 |
+
+**응답 확장 (additive — 기존 필드 전부 유지)**: `/analyze`에 `market_price`(min/avg/max/표본수/신뢰도)·
+`platform`·`thumbnail_url`·`location`, `/checklist`에 `groups[]`(거래 전/현장/결제 전 3단계),
+`/inquiry-script`에 `questions[]`(선택형)+`combined_script`, 목록 아이템에 시각·URL·플랫폼 필드.
+`/compare` 응답에 `comparison_id` (자동 저장된 비교 기록 id).
+
+DB: `analysis_history.deleted_at` 컬럼(자동 마이그레이션) + `comparison_history` 테이블 추가 (총 7개).
+테스트: 85개 (`test_advisor.py`, `test_p0_endpoints.py` 추가).
+
+**인증 (P0-3·P0-4, 2026-08-02)**: `POST /auth/signup`·`/auth/login` → Bearer 토큰(7일).
+토큰을 보내면 user_id 위조가 차단되고(403 `AUTH_MISMATCH`), 안 보내면 기존처럼 동작(데모 모드).
+`AUTH_REQUIRED=1`로 전면 강제 가능. guest 기록 이전은 `POST /account/migrate-guest`(토큰 필수, 멱등).
+상세는 AGENTS.md "2026-08-02 확장" 절.
+
+**보안 수정 (2026-08-02, 어드버세리얼 리뷰로 실측 재현 후 픽스)**: ① IDOR — 남의 `item_id`를 찜/비교/
+체크리스트 등에 끼워넣어 분석 원문을 읽던 구멍 → 모든 참조 지점에 소유권 검증(남의 것은 404) ②
+`AUTH_SECRET=`(빈 값)이면 서명키가 빈 문자열이 되던 함정 → 폴백 수정 + 운영 모드 기동 가드 ③ SSRF —
+`/analyze`로 내부망·클라우드 메타데이터를 긁어오던 문제 → 공개 IP만 허용, 리다이렉트 매 홉 검사.
+잔여 리스크(브루트포스 제한·토큰 취소 없음 등)는 AGENTS.md "보안 점검 결과" 참고.
