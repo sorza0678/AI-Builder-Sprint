@@ -1,5 +1,6 @@
 import { apiRequest, query } from './api-client';
 import type {
+  ApiProgressTradeMethod,
   ApiTransactionDecision,
   ApiTransactionStage,
   ChecklistData,
@@ -21,9 +22,26 @@ export async function fetchPriceProposal(item_id: number) {
   const user_id = await getOrCreateGuestId();
   return apiRequest<PriceProposalData>('/api/v1/price-proposal', { method: 'POST', body: JSON.stringify({ user_id, item_id }) });
 }
-export async function setTransaction(item_id: number, stage: ApiTransactionStage, decision: ApiTransactionDecision | null) {
+export interface TransactionPlan {
+  meeting_at: string | null;
+  meeting_place: string | null;
+  trade_method: ApiProgressTradeMethod | null;
+  memo: string | null;
+  payment_method: string | null;
+}
+export async function setTransaction(
+  item_id: number,
+  stage: ApiTransactionStage,
+  decision: ApiTransactionDecision | null,
+  plan: TransactionPlan,
+) {
   const user_id = await getOrCreateGuestId();
-  return apiRequest<{ item_id: number; stage: ApiTransactionStage; decision: ApiTransactionDecision | null; updated_at: string }>('/api/v1/transaction', { method: 'POST', body: JSON.stringify({ user_id, item_id, stage, decision }) });
+  return apiRequest<{
+    item_id: number; stage: ApiTransactionStage; decision: ApiTransactionDecision | null; updated_at: string;
+  } & TransactionPlan>('/api/v1/transaction', {
+    method: 'POST',
+    body: JSON.stringify({ user_id, item_id, stage, decision, ...plan }),
+  });
 }
 export async function getTransactions(stage?: ApiTransactionStage, decision?: ApiTransactionDecision) {
   const user_id = await getOrCreateGuestId();

@@ -29,7 +29,7 @@ export function mapAnalyzeData(data: AnalyzeData, sourceUrl = '', imageUrl: stri
     usagePeriod: details?.usage_period ?? '',
     components: details?.components ?? [],
     defects: details?.defects ?? data.product_status.defects_found,
-    sellerDescription: '',
+    sellerDescription: data.seller_description ?? '',
     saved: false,
   };
   return {

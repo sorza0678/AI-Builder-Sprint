@@ -19,7 +19,7 @@ import {
 } from '@/src/mocks/comparison';
 import { addComparisonItem, compareItems, getComparisonHistoryById, getComparisonItems, removeComparisonItem } from '@/src/services/comparison-service';
 import { getHistory } from '@/src/services/history-service';
-import type { AnalyzeData, HistoryItem } from '@/src/services/api-types';
+import type { AnalyzeData, ApiListingTradeMethod, HistoryItem } from '@/src/services/api-types';
 import { getAnalysisDetailData } from '@/src/services/analysis-service';
 import { riskMap } from '@/src/utils/risk-level';
 
@@ -39,6 +39,12 @@ function riskDetail(item: AnalyzeData): string | undefined {
   }
   return item.scam_warnings.join(', ') || undefined;
 }
+
+const TRADE_METHOD_LABELS: Record<ApiListingTradeMethod, string> = {
+  IN_PERSON: '직거래',
+  DELIVERY: '택배',
+  BOTH: '직거래/택배',
+};
 
 export default function CompareScreen() {
   const { historyId, reset } = useLocalSearchParams<{ historyId?: string; reset?: string }>();
@@ -80,6 +86,7 @@ export default function CompareScreen() {
           platform: detail?.platform,
           thumbnail_url: detail?.thumbnail_url,
           location: detail?.location,
+          trade_method: detail?.trade_method,
           source_url: detail?.source_url,
         };
       });
@@ -132,7 +139,7 @@ export default function CompareScreen() {
       condition: { primary: item.condition?.grade ?? '미지원' },
       defects: { primary: item.product_status.defects_found.join(', ') || '확인된 하자 없음' },
       components: { primary: item.product_status.missing_components.length ? `누락: ${item.product_status.missing_components.join(', ')}` : '누락 정보 없음' },
-      tradeMethod: { primary: '미지원' },
+      tradeMethod: { primary: item.trade_method ? TRADE_METHOD_LABELS[item.trade_method] : '미지원' },
       sellerTrust: { primary: '미지원' },
       risk: { primary: riskLabel(item), secondary: riskDetail(item) },
       needsCheck: { primary: `${item.product_status.defects_found.length + item.product_status.missing_components.length + item.scam_warnings.length}개 항목` },

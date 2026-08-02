@@ -17,6 +17,7 @@ export interface ApiComparable {
   title: string; price: number; platform: string; url: string | null;
   location?: string | null; sold?: boolean | null;
 }
+export type ApiListingTradeMethod = 'IN_PERSON' | 'DELIVERY' | 'BOTH';
 
 export interface AnalyzeData {
   item_id: number;
@@ -34,6 +35,8 @@ export interface AnalyzeData {
   platform?: string | null;
   thumbnail_url?: string | null;
   location?: string | null;
+  seller_description?: string | null;
+  trade_method?: ApiListingTradeMethod | null;
   source_url?: string;
   bookmarked_at?: string;
   comparison_added_at?: string;
@@ -46,10 +49,16 @@ export interface HistoryItem {
 }
 export interface HistoryData { items: HistoryItem[]; page: number; size: number; total: number }
 export interface CompareData { items: AnalyzeData[]; recommendation: string; comparison_id?: number | null }
+export type ApiProgressTradeMethod = 'IN_PERSON' | 'DELIVERY';
 export interface TransactionItem {
   item_id: number; title: string; price: number; trust_score: number;
   risk_level: ApiRiskLevel; stage: ApiTransactionStage;
   decision: ApiTransactionDecision | null; updated_at: string;
+  meeting_at: string | null;
+  meeting_place: string | null;
+  trade_method: ApiProgressTradeMethod | null;
+  memo: string | null;
+  payment_method: string | null;
 }
 export interface MyPageUser {
   id: string; nickname: string | null; profile_image_url: string | null; created_at: string;

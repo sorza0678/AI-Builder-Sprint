@@ -2,18 +2,21 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import {
   ImageStyle,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text as NativeText,
+  TextInput,
   View,
   ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { ErrorState, LoadingState } from '@/src/components/common';
+import { AppButton, AppTextInput, ErrorState, LoadingState } from '@/src/components/common';
 import { Text } from '@/src/components/pretendard-text';
 import {
   TradeChecklistItem,
@@ -23,7 +26,7 @@ import {
 import { getAnalysisResult } from '@/src/services/analysis-service';
 import { fetchPriceProposal, getChecklist, getInquiryScript, getTransactions, setTransaction } from '@/src/services/trade-service';
 import { getChecklistState, putChecklistState } from '@/src/services/checklist-state-service';
-import type { ApiChecklistGroupKey, ApiTransactionDecision, ApiTransactionStage, PriceProposalData } from '@/src/services/api-types';
+import type { ApiChecklistGroupKey, ApiProgressTradeMethod, ApiTransactionDecision, ApiTransactionStage, PriceProposalData } from '@/src/services/api-types';
 import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
 import { AnalysisResult } from '@/src/types/marketplace';
 import { markTradeSelection } from '@/src/repositories/trade-selection-repository';
@@ -35,6 +38,16 @@ type TradeProgressStep = 'beforeContact' | 'contacting' | 'scheduled' | 'complet
 type TradeDecision = 'considering' | 'hold' | 'excluded';
 type NullableTradeProgressStep = TradeProgressStep | null;
 type NullableTradeDecision = TradeDecision | null;
+
+type TransactionSavePatch = Partial<{
+  stage: ApiTransactionStage;
+  decision: ApiTransactionDecision | null;
+  meetingAt: string | null;
+  meetingPlace: string;
+  progressTradeMethod: ApiProgressTradeMethod | null;
+  memo: string;
+  paymentMethod: string;
+}>;
 
 const PROGRESS_STEPS: { value: TradeProgressStep; label: string }[] = [
   { value: 'beforeContact', label: '문의 전' },
@@ -68,6 +81,13 @@ const TRADE_METHODS: { value: TradeMethod; label: string }[] = [
   { value: 'inPerson', label: '직거래' },
   { value: 'delivery', label: '택배 거래' },
   { value: 'undecided', label: '미정' },
+];
+
+// '진행' 탭의 거래 방식 선택 — 서버 TransactionRequest.trade_method에 저장되는 별개 필드.
+// 위 TRADE_METHODS(체크리스트 탭, 로컬 전용 3종)와 혼동하지 않도록 이름과 state를 분리했다.
+const PROGRESS_TRADE_METHODS: { value: ApiProgressTradeMethod; label: string }[] = [
+  { value: 'IN_PERSON', label: '직거래' },
+  { value: 'DELIVERY', label: '택배' },
 ];
 
 const METHOD_SAFETY_NOTES: Record<TradeMethod, string[]> = {
@@ -587,16 +607,96 @@ function PriceStepContent({
   );
 }
 
+function formatMeetingAt(value: string | null): string {
+  if (!value) return '날짜와 시간을 선택하세요';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '날짜와 시간을 선택하세요';
+  return date.toLocaleString('ko-KR', {
+    month: 'long', day: 'numeric', weekday: 'short', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function MeetingDateTimeField({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: string | null;
+}) {
+  const [iosPickerVisible, setIosPickerVisible] = useState(false);
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.planFieldRow}>
+        <Text style={styles.planFieldLabel}>거래 일시</Text>
+        <Text style={styles.planFieldWebNote}>
+          {value ? formatMeetingAt(value) : '웹에서는 아직 지원하지 않는 기능입니다.'}
+        </Text>
+      </View>
+    );
+  }
+
+  const currentValue = value ? new Date(value) : new Date();
+
+  const openAndroidPicker = (): void => {
+    DateTimePickerAndroid.open({
+      mode: 'date',
+      value: currentValue,
+      onChange: (_event, pickedDate) => {
+        if (!pickedDate) return;
+        DateTimePickerAndroid.open({
+          mode: 'time',
+          value: pickedDate,
+          onChange: (_timeEvent, pickedTime) => {
+            if (!pickedTime) return;
+            onChange(pickedTime.toISOString());
+          },
+        });
+      },
+    });
+  };
+
+  return (
+    <View style={styles.planFieldRow}>
+      <Text style={styles.planFieldLabel}>거래 일시</Text>
+      <Pressable
+        accessibilityLabel="거래 일시 선택"
+        accessibilityRole="button"
+        onPress={() => (Platform.OS === 'android' ? openAndroidPicker() : setIosPickerVisible((current) => !current))}
+        style={({ pressed }) => [styles.planDateTrigger, pressed && styles.pressed]}>
+        <Text style={styles.planDateTriggerText}>{formatMeetingAt(value)}</Text>
+      </Pressable>
+      {Platform.OS === 'ios' && iosPickerVisible && (
+        <DateTimePicker
+          mode="datetime"
+          onChange={(_event, pickedDate) => {
+            if (pickedDate) onChange(pickedDate.toISOString());
+          }}
+          value={currentValue}
+        />
+      )}
+    </View>
+  );
+}
+
 function ProgressStepContent({
   decision: apiDecision,
-  itemId,
-  onChange,
+  meetingAt,
+  meetingPlace,
+  memo,
+  onSave,
+  paymentMethod,
+  progressTradeMethod,
   stage,
   title,
 }: {
   decision: ApiTransactionDecision | null;
-  itemId: number;
-  onChange: (stage: ApiTransactionStage, decision: ApiTransactionDecision | null) => void;
+  meetingAt: string | null;
+  meetingPlace: string;
+  memo: string;
+  onSave: (patch: TransactionSavePatch) => void;
+  paymentMethod: string;
+  progressTradeMethod: ApiProgressTradeMethod | null;
   stage: ApiTransactionStage | null;
   title: string;
 }) {
@@ -611,6 +711,26 @@ function ProgressStepContent({
   const activeIndex = progressStep
     ? PROGRESS_STEPS.findIndex((step) => step.value === progressStep)
     : -1;
+
+  const [draftMeetingAt, setDraftMeetingAt] = useState(meetingAt);
+  const [draftMeetingPlace, setDraftMeetingPlace] = useState(meetingPlace);
+  const [draftTradeMethod, setDraftTradeMethod] = useState(progressTradeMethod);
+  const [draftMemo, setDraftMemo] = useState(memo);
+  const [draftPaymentMethod, setDraftPaymentMethod] = useState(paymentMethod);
+  const [savingPlan, setSavingPlan] = useState(false);
+
+  const savePlan = (): void => {
+    if (savingPlan) return;
+    setSavingPlan(true);
+    onSave({
+      meetingAt: draftMeetingAt,
+      meetingPlace: draftMeetingPlace,
+      progressTradeMethod: draftTradeMethod,
+      memo: draftMemo,
+      paymentMethod: draftPaymentMethod,
+    });
+    setTimeout(() => setSavingPlan(false), 600);
+  };
 
   return (
     <View style={styles.progressPage}>
@@ -653,16 +773,7 @@ function ProgressStepContent({
                       beforeContact: 'BEFORE_CONTACT', contacting: 'CONTACTING',
                       scheduled: 'SCHEDULED', completed: 'COMPLETED',
                     };
-                    const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
-                      considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
-                    };
-                    const nextStage = stageMap[step.value];
-                    const nextDecision = decision ? decisionMap[decision] : null;
-                    onChange(nextStage, nextDecision);
-                    void Promise.all([
-                      markTradeSelection(itemId),
-                      setTransaction(itemId, nextStage, nextDecision),
-                    ]);
+                    onSave({ stage: stageMap[step.value] });
                   }}
                   style={({ pressed }) => [styles.tradeStepperItem, pressed && styles.pressed]}>
                   <View
@@ -709,22 +820,10 @@ function ProgressStepContent({
                 accessibilityState={{ selected }}
                 key={item.value}
                 onPress={() => {
-                  if (progressStep) {
-                    const stageMap: Record<TradeProgressStep, ApiTransactionStage> = {
-                      beforeContact: 'BEFORE_CONTACT', contacting: 'CONTACTING',
-                      scheduled: 'SCHEDULED', completed: 'COMPLETED',
-                    };
-                    const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
-                      considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
-                    };
-                    const nextStage = stageMap[progressStep];
-                    const nextDecision = decisionMap[item.value];
-                    onChange(nextStage, nextDecision);
-                    void Promise.all([
-                      markTradeSelection(itemId),
-                      setTransaction(itemId, nextStage, nextDecision),
-                    ]);
-                  }
+                  const decisionMap: Record<TradeDecision, ApiTransactionDecision> = {
+                    considering: 'CONSIDERING', hold: 'HOLD', excluded: 'EXCLUDED',
+                  };
+                  onSave({ decision: decisionMap[item.value] });
                 }}
                 style={({ pressed }) => [
                   styles.tradeDecisionButton,
@@ -743,6 +842,75 @@ function ProgressStepContent({
           })}
         </View>
 
+      </View>
+
+      <View style={styles.planSection}>
+        <Text style={styles.groupTitle}>거래 준비 정보</Text>
+
+        <MeetingDateTimeField onChange={setDraftMeetingAt} value={draftMeetingAt} />
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>거래 장소</Text>
+          <AppTextInput
+            maxLength={200}
+            onChangeText={setDraftMeetingPlace}
+            placeholder="만날 장소를 입력하세요"
+            style={styles.planTextInput}
+            value={draftMeetingPlace}
+          />
+        </View>
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>거래 방식</Text>
+          <View style={styles.methodRow}>
+            {PROGRESS_TRADE_METHODS.map((item) => {
+              const selected = draftTradeMethod === item.value;
+              return (
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  key={item.value}
+                  onPress={() => setDraftTradeMethod(selected ? null : item.value)}
+                  style={[styles.methodChip, selected && styles.methodChipSelected]}>
+                  <Text style={[styles.methodChipText, selected && styles.methodChipTextSelected]}>
+                    {item.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>메모</Text>
+          <TextInput
+            maxLength={2000}
+            multiline
+            numberOfLines={4}
+            onChangeText={setDraftMemo}
+            placeholder="개인 메모를 남겨보세요"
+            placeholderTextColor="#B9BEC5"
+            style={styles.planMemoInput}
+            value={draftMemo}
+          />
+        </View>
+
+        <View style={styles.planFieldRow}>
+          <Text style={styles.planFieldLabel}>결제 방식</Text>
+          <AppTextInput
+            maxLength={50}
+            onChangeText={setDraftPaymentMethod}
+            placeholder="결제 방식을 입력하세요 (예: 현금)"
+            style={styles.planTextInput}
+            value={draftPaymentMethod}
+          />
+        </View>
+
+        <AppButton
+          disabled={savingPlan}
+          onPress={savePlan}
+          title={savingPlan ? '저장 중...' : '거래 준비 정보 저장'}
+        />
       </View>
     </View>
   );
@@ -763,6 +931,11 @@ export default function TradePreparationScreen() {
   const [priceProposal, setPriceProposal] = useState<PriceProposalData>();
   const [transactionStage, setTransactionStage] = useState<ApiTransactionStage | null>(null);
   const [transactionDecision, setTransactionDecision] = useState<ApiTransactionDecision | null>(null);
+  const [meetingAt, setMeetingAt] = useState<string | null>(null);
+  const [meetingPlace, setMeetingPlace] = useState('');
+  const [progressTradeMethod, setProgressTradeMethod] = useState<ApiProgressTradeMethod | null>(null);
+  const [memo, setMemo] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -808,6 +981,11 @@ export default function TradePreparationScreen() {
             const transaction = transactionResult.value.items.find((item) => item.item_id === Number(id));
             setTransactionStage(transaction?.stage ?? null);
             setTransactionDecision(transaction?.decision ?? null);
+            setMeetingAt(transaction?.meeting_at ?? null);
+            setMeetingPlace(transaction?.meeting_place ?? '');
+            setProgressTradeMethod(transaction?.trade_method ?? null);
+            setMemo(transaction?.memo ?? '');
+            setPaymentMethod(transaction?.payment_method ?? '');
           }
           if (priceProposalResult.status === 'fulfilled') setPriceProposal(priceProposalResult.value);
         }
@@ -876,6 +1054,37 @@ export default function TradePreparationScreen() {
     } catch {
       // 클립보드 접근 실패 시 화면 상태는 유지합니다.
     }
+  };
+
+  const saveTransaction = (patch: TransactionSavePatch): void => {
+    if (!result) return;
+    const nextStage = patch.stage ?? transactionStage ?? 'BEFORE_CONTACT';
+    const nextDecision = 'decision' in patch ? patch.decision ?? null : transactionDecision;
+    const nextMeetingAt = 'meetingAt' in patch ? patch.meetingAt ?? null : meetingAt;
+    const nextMeetingPlace = 'meetingPlace' in patch ? patch.meetingPlace ?? '' : meetingPlace;
+    const nextTradeMethod = 'progressTradeMethod' in patch ? patch.progressTradeMethod ?? null : progressTradeMethod;
+    const nextMemo = 'memo' in patch ? patch.memo ?? '' : memo;
+    const nextPaymentMethod = 'paymentMethod' in patch ? patch.paymentMethod ?? '' : paymentMethod;
+
+    setTransactionStage(nextStage);
+    setTransactionDecision(nextDecision);
+    setMeetingAt(nextMeetingAt);
+    setMeetingPlace(nextMeetingPlace);
+    setProgressTradeMethod(nextTradeMethod);
+    setMemo(nextMemo);
+    setPaymentMethod(nextPaymentMethod);
+
+    const itemId = Number(result.id);
+    void Promise.all([
+      markTradeSelection(itemId),
+      setTransaction(itemId, nextStage, nextDecision, {
+        meeting_at: nextMeetingAt,
+        meeting_place: nextMeetingPlace.trim() || null,
+        trade_method: nextTradeMethod,
+        memo: nextMemo.trim() || null,
+        payment_method: nextPaymentMethod.trim() || null,
+      }),
+    ]);
   };
 
   if (loading) {
@@ -1042,11 +1251,12 @@ export default function TradePreparationScreen() {
         ) : (
           <ProgressStepContent
             decision={transactionDecision}
-            itemId={Number(result.id)}
-            onChange={(stage, decision) => {
-              setTransactionStage(stage);
-              setTransactionDecision(decision);
-            }}
+            meetingAt={meetingAt}
+            meetingPlace={meetingPlace}
+            memo={memo}
+            onSave={saveTransaction}
+            paymentMethod={paymentMethod}
+            progressTradeMethod={progressTradeMethod}
             stage={transactionStage}
             title={result.listing.title}
           />
@@ -1754,6 +1964,57 @@ const styles = StyleSheet.create({
   tradeDecisionTextSelected: {
     color: '#8656C2',
     fontWeight: '500',
+  },
+  planSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 40,
+    gap: 16,
+  },
+  planFieldRow: { gap: 8 },
+  planFieldLabel: {
+    color: '#838C97',
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 18.9,
+    letterSpacing: -0.3,
+  },
+  planFieldWebNote: {
+    color: '#B9BEC5',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  planDateTrigger: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#EDEDED',
+    borderRadius: 10,
+  },
+  planDateTriggerText: {
+    color: '#515760',
+    fontSize: 14,
+    letterSpacing: -0.3,
+  },
+  planTextInput: {
+    borderColor: '#EDEDED',
+    borderRadius: 10,
+    color: '#515760',
+    fontSize: 14,
+  },
+  planMemoInput: {
+    minHeight: 96,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#EDEDED',
+    borderRadius: 10,
+    backgroundColor: '#F6F5FA',
+    color: '#515760',
+    fontSize: 14,
+    lineHeight: 20,
+    letterSpacing: -0.3,
+    textAlignVertical: 'top',
   },
   pressed: { opacity: 0.65 },
 });
