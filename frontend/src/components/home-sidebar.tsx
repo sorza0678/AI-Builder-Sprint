@@ -137,6 +137,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="비교기록"
                   icon={require('@/assets/images/sidebar/comparison-history.svg')}
                   iconSize={{ width: 22.715, height: 22.125 }}
+                  href="/comparison-history"
                   onNavigate={navigate}
                 />
                 <MenuRow
