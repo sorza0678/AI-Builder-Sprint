@@ -146,3 +146,33 @@ def test_scrape_listing_returns_fallback_for_internal_url():
 
     result = s.scrape_listing("http://127.0.0.1:8000/admin")
     assert result["scrape_ok"] is False
+
+
+# ---------- posted_at (매물 등록 시각) ----------
+
+def test_iso_utc_normalizes_various_formats():
+    from app import scraper as s
+
+    assert s._iso_utc("2026-08-02T01:26:28.755683Z") == "2026-08-02T01:26:28Z"
+    assert s._iso_utc("2026-07-30T02:53:55Z") == "2026-07-30T02:53:55Z"
+    assert s._iso_utc("2026-07-30T11:53:55+09:00") == "2026-07-30T02:53:55Z"  # KST → UTC
+    for bad in (None, "", "어제", 12345, "not-a-date"):
+        assert s._iso_utc(bad) is None
+
+
+def test_posted_at_from_og_published_time(monkeypatch):
+    html = (
+        '<html><head><meta property="og:title" content="테스트 매물">'
+        '<meta property="og:description" content="가격: 50,000원">'
+        '<meta property="article:published_time" content="2026-07-30T11:53:55+09:00">'
+        "</head></html>"
+    )
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(html))
+    result = scraper.scrape_listing("https://joongna.com/product/1")
+    assert result["posted_at"] == "2026-07-30T02:53:55Z"
+
+
+def test_posted_at_null_when_absent(monkeypatch):
+    html = '<html><head><meta property="og:title" content="테스트 매물"></head></html>'
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(html))
+    assert scraper.scrape_listing("https://joongna.com/product/1")["posted_at"] is None

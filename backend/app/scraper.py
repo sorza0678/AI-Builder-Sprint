@@ -5,11 +5,17 @@ FALLBACK_LISTING 을 반환한다 (데모 안죽게). fallback 여부는 scrape_
 """
 import ipaddress
 import json
+import logging
 import re
 import socket
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from app import cache
+
+logger = logging.getLogger(__name__)
 
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -39,6 +45,12 @@ FALLBACK_LISTING = {
     "description": "생활기스 약간 있고 배터리 효율 88%입니다. 박스 없음, 직거래 선호합니다.",
     "image": None,
     "location": None,
+    "posted_at": None,
+    "category": None,
+    "image_urls": [],
+    "trade_method": None,
+    "platform_condition": None,
+    "seller_profile_url": None,
     "seller_trade_count": None,
     "seller_account_age_days": None,
     "scrape_ok": False,
@@ -120,6 +132,23 @@ def _extract_price(*texts: str | None) -> int | None:
     return None
 
 
+def _iso_utc(value) -> str | None:
+    """다양한 시각 표기 → 'YYYY-MM-DDTHH:MM:SSZ'. 파싱 못 하면 None (지어내지 않는다).
+
+    번개장터는 '2026-08-02T01:26:28.755683Z', og태그는 '+09:00' 오프셋 형태로 준다.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _find_ld_product(html: str) -> dict | None:
     """<script type="application/ld+json"> 중 schema.org Product 블록을 찾아 반환.
 
@@ -184,6 +213,38 @@ def _get_public(url: str) -> httpx.Response:
     raise ValueError("리다이렉트가 너무 많습니다")
 
 
+MAX_IMAGES = 6
+
+
+def _bunjang_images(template: str | None, count) -> list[str]:
+    """번개장터 imageUrl 템플릿({cnt}/{res} 자리표시자) → 실제 이미지 URL 목록."""
+    if not isinstance(template, str) or "{cnt}" not in template:
+        return []
+    try:
+        n = min(int(count or 1), MAX_IMAGES)
+    except (TypeError, ValueError):
+        n = 1
+    return [
+        template.replace("{cnt}", str(i)).replace("{res}", "360")
+        for i in range(1, max(n, 1) + 1)
+    ]
+
+
+def _bunjang_trade_method(trade) -> str | None:
+    """거래 방식 → IN_PERSON | DELIVERY | BOTH (판단 근거 없으면 None)."""
+    if not isinstance(trade, dict):
+        return None
+    in_person = trade.get("inPerson")
+    has_shipping = bool(trade.get("shippingSpecs")) or trade.get("freeShipping") is True
+    if in_person is None and not has_shipping:
+        return None
+    if in_person and has_shipping:
+        return "BOTH"
+    if in_person:
+        return "IN_PERSON"
+    return "DELIVERY" if has_shipping else None
+
+
 def _scrape_bunjang_api(url: str) -> dict | None:
     """번개장터는 상품 API가 열려있어 og태그보다 정확하다. 실패하면 None."""
     m = re.search(r"/products/(\d+)", url)
@@ -210,14 +271,31 @@ def _scrape_bunjang_api(url: str) -> dict | None:
         "description": (d.get("description") or "")[:2000],
         "image": d.get("imageUrl"),
         "location": location if isinstance(location, str) else None,
+        # 등록 시각: describedAt(최초 작성) 우선, 없으면 updatedAt(최종 수정).
+        # 프론트가 "4일 전"으로 렌더할 수 있게 ISO 문자열로 준다 —
+        # API의 updatedBefore("14시간 전")는 저장하면 그대로 굳어버려서 안 쓴다.
+        "posted_at": _iso_utc(d.get("describedAt") or d.get("updatedAt")),
+        # 가장 구체적인 카테고리 (categories 는 대분류→소분류 순)
+        "category": (d.get("category") or {}).get("name") or None,
+        "image_urls": _bunjang_images(d.get("imageUrl"), d.get("imageCount")),
+        "trade_method": _bunjang_trade_method(d.get("trade")),
+        "platform_condition": d.get("condition") or None,  # 플랫폼이 매긴 상태 등급
+        "seller_profile_url": None,  # 상품 API 응답에 판매자 식별자가 없다
         "seller_trade_count": None,
         "seller_account_age_days": None,
         "scrape_ok": True,
     }
 
 
+SCRAPE_CACHE_TTL = 180.0  # 같은 URL 재분석 시 재수집하지 않는다 (데모 반복 시연 대비)
+
+
 def scrape_listing(url: str) -> dict:
-    """URL → 매물 정보 dict. 어떤 경우에도 예외를 던지지 않는다."""
+    """URL → 매물 정보 dict (3분 캐시). 어떤 경우에도 예외를 던지지 않는다."""
+    return cache.get_or_call(f"scrape:{url}", SCRAPE_CACHE_TTL, lambda: _scrape_listing_uncached(url))
+
+
+def _scrape_listing_uncached(url: str) -> dict:
     platform = detect_platform(url)
 
     try:
@@ -234,8 +312,8 @@ def scrape_listing(url: str) -> dict:
             result = _scrape_bunjang_api(url)
             if result:
                 return result
-        except Exception:
-            pass  # og 태그 방식으로 재시도
+        except Exception as e:
+            logger.info("번개장터 API 실패, og태그로 재시도: %s (%s)", url, e)
 
     try:
         r = _get_public(url)
@@ -268,9 +346,24 @@ def scrape_listing(url: str) -> dict:
             "description": description[:2000],
             "image": image,
             "location": None,  # og태그/JSON-LD 경로에서는 판매 지역을 얻을 수 없다
+            # 등록 시각: 표준 메타태그가 있는 사이트만 — 없으면 null
+            "posted_at": _iso_utc(
+                _meta(html, "article:published_time")
+                or _meta(html, "og:published_time")
+                or (product.get("releaseDate") if product else None)
+            ),
+            # og태그/JSON-LD 로 얻을 수 있는 것만 — 나머지는 null (지어내지 않는다)
+            "category": (product.get("category") if product else None) or _meta(html, "product:category"),
+            "image_urls": [image] if image else [],
+            "trade_method": None,
+            "platform_condition": None,
+            "seller_profile_url": None,
             "seller_trade_count": None,
             "seller_account_age_days": None,
             "scrape_ok": True,
         }
-    except Exception:
+    except Exception as e:
+        # 사용자에겐 SCRAPE_FAILED 로 나가지만, 왜 실패했는지는 로그에 남겨야
+        # 데모 중 "이 URL 은 왜 안 돼요?" 를 즉시 답할 수 있다.
+        logger.warning("매물 수집 실패 → fallback: %s (%s: %s)", url, type(e).__name__, e)
         return {**FALLBACK_LISTING, "platform": platform}

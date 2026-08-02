@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # ai_report 등이 읽는 UPSTAGE_API_KEY 를 backend/.env 에서 로드
 
+import logging
 import os
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -43,6 +44,8 @@ from app.schemas import (
     BookmarkRequest,
     BookmarkSuccess,
     ChecklistRequest,
+    ChecklistStateRequest,
+    ChecklistStateSuccess,
     ChecklistSuccess,
     CompareRequest,
     CompareSuccess,
@@ -67,6 +70,7 @@ from app.schemas import (
     MyPageSuccess,
     PriceProposalRequest,
     PriceProposalSuccess,
+    RecommendationSuccess,
     SignupRequest,
     TransactionDecisionEnum,
     TransactionListSuccess,
@@ -74,6 +78,14 @@ from app.schemas import (
     TransactionStageEnum,
     TransactionSuccess,
 )
+
+# 로깅 — 외부 호출 실패는 전부 fallback 으로 삼켜지므로, 로그가 없으면
+# 데모 중 "왜 분석이 이상하죠?" 에 답할 방법이 없다. LOG_LEVEL 로 조절.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+)
+logger = logging.getLogger("app")
 
 
 # ---------- 인증 (P0-3): 하이브리드 신원 강제 ----------
@@ -300,7 +312,8 @@ def analyze(req: AnalyzeRequest):
     if not listing["scrape_ok"]:
         return error(400, "SCRAPE_FAILED", "매물 페이지를 불러오지 못했습니다. URL을 확인해주세요.")
 
-    market = market_price.get_market_detail(listing["title"], listing["price"])
+    # exclude_url: 분석 대상 자신이 시세 표본·근거 매물에 섞이지 않게 제외
+    market = market_price.get_market_detail(listing["title"], listing["price"], req.url)
     verdict = rule_engine.evaluate(listing, market["average"], market["measured"])
     verdict = ai_report.merge_report(verdict, ai_report.get_ai_report(listing))
 
@@ -311,10 +324,18 @@ def analyze(req: AnalyzeRequest):
         "market_price_avg": market["average"],
         # 시세 상세(min/max/표본수/실측여부) — 프론트가 "평균가의 신뢰도"를 판단할 근거
         "market_price": market,
+        # 그 시세를 만든 실제 매물들 — "왜 이 가격인지" 사용자에게 보여줄 근거
+        "comparables": market["comparables"],
         # 목록 화면용 매물 기본 정보 — 수집 못 했으면 null (지어내지 않는다)
         "platform": listing.get("platform"),
         "thumbnail_url": listing.get("image"),
         "location": listing.get("location"),
+        "posted_at": listing.get("posted_at"),
+        "category": listing.get("category"),
+        "image_urls": listing.get("image_urls") or [],
+        "trade_method": listing.get("trade_method"),
+        "seller_description": listing.get("description") or None,
+        "seller_profile_url": listing.get("seller_profile_url"),
         # 설명 원문(요약) — 질문 생성·가격 제안이 쓰는 내부 데이터.
         # description/measured 는 응답 스키마(AnalyzeData)에 없어서 API 응답에서는
         # response_model 이 자동으로 걸러낸다 (DB raw JSON에만 남음).
@@ -413,9 +434,19 @@ def history(
 def set_transaction(req: TransactionRequest):
     if not db.user_owns_analysis(req.user_id, req.item_id):  # 소유권 검증 (남의 매물 참조 차단)
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
-    updated_at = db.upsert_transaction_status(req.user_id, req.item_id, req.stage, req.decision)
+    plan = req.model_dump(
+        include={"meeting_at", "meeting_place", "trade_method", "memo", "payment_method"}
+    )
+    plan["meeting_at"] = req.meeting_at.isoformat(sep=" ") if req.meeting_at else None
+    updated_at = db.upsert_transaction_status(
+        req.user_id, req.item_id, req.stage, req.decision, plan
+    )
     return success(
-        {"item_id": req.item_id, "stage": req.stage, "decision": req.decision, "updated_at": updated_at}
+        {
+            **req.model_dump(exclude={"user_id", "item_id"}),
+            "item_id": req.item_id,
+            "updated_at": updated_at,
+        }
     )
 
 
@@ -681,15 +712,95 @@ def delete_comparison_history(
     return success({"comparison_id": comparison_id, "deleted": True})
 
 
-@app.get("/health", tags=["meta"], summary="상태 확인")
-def health():
-    import os
+@app.put(
+    "/api/v1/checklist-state",
+    response_model=ChecklistStateSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["follow-up"],
+    summary="체크리스트 체크 상태 저장 (기기 바뀌어도 유지)",
+)
+def put_checklist_state(req: ChecklistStateRequest):
+    if not db.user_owns_analysis(req.user_id, req.item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    updated_at = db.upsert_checklist_state(
+        req.user_id, req.item_id, req.checked_item_ids, req.excluded_item_ids
+    )
+    return success(
+        {
+            "item_id": req.item_id,
+            "checked_item_ids": req.checked_item_ids,
+            "excluded_item_ids": req.excluded_item_ids,
+            "updated_at": updated_at,
+        }
+    )
 
-    return {
-        "ok": True,
-        "data": {"status": "alive", "step": 6, "upstage_key": bool(os.getenv("UPSTAGE_API_KEY"))},
-        "error": None,
+
+@app.get(
+    "/api/v1/checklist-state",
+    response_model=ChecklistStateSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["follow-up"],
+    summary="저장된 체크 상태 조회 (없으면 빈 목록)",
+)
+def get_checklist_state(
+    user_id: str = Query(examples=["demo-user-1"]),
+    item_id: int = Query(examples=[1]),
+):
+    if not db.user_owns_analysis(user_id, item_id):
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
+    state = db.get_checklist_state(user_id, item_id)
+    # 한 번도 저장 안 했으면 404 대신 빈 상태 — 프론트가 분기 없이 그대로 쓰면 된다
+    return success(
+        state
+        or {
+            "item_id": item_id,
+            "checked_item_ids": [],
+            "excluded_item_ids": [],
+            "updated_at": None,
+        }
+    )
+
+
+@app.get(
+    "/api/v1/recommendations",
+    response_model=RecommendationSuccess,
+    tags=["mypage"],
+    summary="추천 매물 (분석·찜 기록 기반 — 기록 없으면 빈 배열)",
+)
+def recommendations(
+    user_id: str = Query(examples=["demo-user-1"]),
+):
+    interest = db.get_user_interest(user_id)
+    if not interest["titles"]:
+        # 근거가 없으면 추천하지 않는다 — 임의 추천은 사용자를 오도한다 (문서 18 원칙)
+        return success({"items": [], "total": 0, "basis": []})
+    items = market_price.recommend(interest["titles"], set(interest["seen_urls"]))
+    return success({"items": items, "total": len(items), "basis": interest["titles"][:3]})
+
+
+@app.get("/health", tags=["meta"], summary="상태 확인 (DB 연결 포함)")
+def health():
+    # DB 를 실제로 두드려본다 — 예전엔 DB 가 죽어도 200 이라 헬스체크 의미가 없었다
+    try:
+        with db.get_db() as conn:
+            db._execute(conn, "SELECT 1")
+        db_ok = True
+    except Exception as e:
+        logger.error("헬스체크 DB 연결 실패: %s", e)
+        db_ok = False
+    body = {
+        "status": "alive" if db_ok else "degraded",
+        "database": "ok" if db_ok else "error",
+        "backend": "postgres" if os.getenv("DATABASE_URL") else "sqlite",
+        "upstage_key": bool(os.getenv("UPSTAGE_API_KEY")),
+        "auth_required": bool(os.getenv("AUTH_REQUIRED")),
     }
+    return JSONResponse(
+        status_code=200 if db_ok else 503,
+        content={"ok": db_ok, "data": body, "error": None}
+        if db_ok
+        else {"ok": False, "data": body, "error": {"code": "DB_UNAVAILABLE", "message": "데이터베이스에 연결할 수 없습니다."}},
+    )
 
 
 if __name__ == "__main__":

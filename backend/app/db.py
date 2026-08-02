@@ -3,6 +3,7 @@
 DATABASE_URL 환경변수가 있으면 Postgres(psycopg2), 없으면 SQLite(로컬 개발/테스트) 사용.
 """
 import json
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -10,6 +11,8 @@ from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
+
+logger = logging.getLogger(__name__)
 
 _APP_DIR = Path(__file__).resolve().parent
 DATABASE = _APP_DIR.parent / "resale_guard.db"
@@ -48,9 +51,12 @@ def get_db():
         finally:
             conn.close()
     else:
-        conn = sqlite3.connect(DATABASE)
+        conn = sqlite3.connect(DATABASE, timeout=15.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")  # sqlite3 기본값은 OFF — FK 제약이 선언만 되고 무시되는 걸 방지
+        # WAL: 읽기가 쓰기를 막지 않는다. 데모 중 여러 명이 동시에 써도 "database is locked"
+        # 확률을 낮춘다 (timeout 15초와 함께 이중 방어). 파일이 .db-wal/.db-shm 로 늘어난다.
+        conn.execute("PRAGMA journal_mode = WAL")
         try:
             yield conn
         finally:
@@ -73,12 +79,21 @@ def init_db():
             "ALTER TABLE users ADD COLUMN password_hash TEXT",       # 인증 (P0-3)
             "ALTER TABLE users ADD COLUMN nickname TEXT",
             "ALTER TABLE users ADD COLUMN migrated_to TEXT",         # guest 이전 후 재사용 방지 (P0-4)
+            # 거래 일정·메모 (문서 15)
+            "ALTER TABLE transaction_status ADD COLUMN meeting_at TIMESTAMP",
+            "ALTER TABLE transaction_status ADD COLUMN meeting_place TEXT",
+            "ALTER TABLE transaction_status ADD COLUMN trade_method TEXT",
+            "ALTER TABLE transaction_status ADD COLUMN memo TEXT",
+            "ALTER TABLE transaction_status ADD COLUMN payment_method TEXT",
         ):
             try:
                 _execute(conn, ddl)
                 conn.commit()
-            except Exception:
+            except Exception as e:
+                # 대부분 "duplicate column"(이미 적용됨)이라 정상이지만, 진짜 실패도
+                # 여기로 오므로 흔적은 남긴다 — 조용히 넘기면 원인을 못 찾는다.
                 conn.rollback()
+                logger.debug("마이그레이션 건너뜀 (%s): %s", ddl.split("ADD COLUMN")[-1].strip(), e)
 
 
 def ensure_user(user_id: str):
@@ -203,16 +218,42 @@ def get_multiple_analyses(analysis_ids: list[int], user_id: str | None = None) -
     """복수 분석 결과 조회. user_id를 주면 소유한 것만 반환 + 수정값(listing_details) 우선 반영.
 
     user_id를 주면 소유권 필터가 걸린다 — compare 등에서 남의 매물을 섞어 조회하는 IDOR 방지.
+    id 하나당 커넥션을 열던 N+1 을 없애고 한 번의 쿼리로 가져온다
+    (SQLite 는 차이가 작지만 Supabase 는 커넥션마다 네트워크 왕복이 붙는다).
     """
-    results = []
-    for aid in analysis_ids:
-        data = get_owned_analysis(user_id, aid) if user_id else get_analysis_by_id(aid)
-        if data:
-            results.append(data)
-    if user_id and results:
-        ld_map = _get_listing_rows(user_id, [r["item_id"] for r in results])
-        results = [_apply_listing_override(r, ld_map.get(r["item_id"])) for r in results]
-    return results
+    if not analysis_ids:
+        return []
+    placeholders = ",".join("?" for _ in analysis_ids)
+    query = f"""
+        SELECT a.id, a.raw_analysis_json,
+               ld.title AS ld_title, ld.price AS ld_price, ld.defects_json AS ld_defects_json
+        FROM analysis_history a
+        LEFT JOIN listing_details ld
+               ON ld.analysis_id = a.id AND ld.user_id = a.user_id
+        WHERE a.id IN ({placeholders}) AND a.deleted_at IS NULL
+    """
+    params: list = list(analysis_ids)
+    if user_id:
+        query += " AND a.user_id = ?"
+        params.append(user_id)
+    with get_db() as conn:
+        rows = _execute(conn, query, params).fetchall()
+
+    by_id = {}
+    for row in rows:
+        data = json.loads(row["raw_analysis_json"])
+        if user_id and row["ld_title"] is not None:
+            data = _apply_listing_override(
+                data,
+                {
+                    "title": row["ld_title"],
+                    "price": row["ld_price"],
+                    "defects_json": row["ld_defects_json"],
+                },
+            )
+        by_id[row["id"]] = data
+    # 요청 순서를 유지한다 (프론트가 넘긴 item_ids 순서대로 비교 화면에 뜨게)
+    return [by_id[aid] for aid in analysis_ids if aid in by_id]
 
 
 def bookmark(user_id: str, analysis_id: int) -> bool:
@@ -337,6 +378,7 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
                 "platform": raw.get("platform"),
                 "thumbnail_url": raw.get("thumbnail_url"),
                 "location": raw.get("location"),
+                "posted_at": raw.get("posted_at"),
                 # 항상 UTC — 'Z'를 붙여 aware datetime 으로 내보내야
                 # 프론트(JS Date)가 로컬시간으로 올바르게 변환한다
                 "created_at": _iso_z(row["created_at"]),
@@ -346,21 +388,38 @@ def get_history(user_id: str, page: int = 1, size: int = 10) -> tuple[list, int]
 
 
 def upsert_transaction_status(
-    user_id: str, analysis_id: int, stage: str, decision: str | None
+    user_id: str, analysis_id: int, stage: str, decision: str | None, plan: dict | None = None
 ) -> str:
-    """거래 상태(stage+decision) upsert (매물당 1개, 이력 아님, 매 호출마다 두 필드 모두 덮어씀)
-    → updated_at(ISO, 'Z' 접미사) 반환."""
+    """거래 상태 upsert (매물당 1개, 이력 아님, 매 호출마다 전 필드 덮어씀)
+    → updated_at(ISO, 'Z' 접미사) 반환.
+
+    plan: 거래 일정·장소·메모 등 (문서 15). 생략된 키는 NULL 로 리셋되므로
+    유지하고 싶은 값은 함께 재전송해야 한다 (stage/decision 과 동일한 규칙).
+    """
+    plan = plan or {}
     ensure_user(user_id)
     with get_db() as conn:
         _execute(
             conn,
             """
-            INSERT INTO transaction_status (user_id, analysis_id, stage, decision)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO transaction_status
+                (user_id, analysis_id, stage, decision,
+                 meeting_at, meeting_place, trade_method, memo, payment_method)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, analysis_id)
-            DO UPDATE SET stage = excluded.stage, decision = excluded.decision, updated_at = CURRENT_TIMESTAMP
+            DO UPDATE SET stage = excluded.stage, decision = excluded.decision,
+                          meeting_at = excluded.meeting_at,
+                          meeting_place = excluded.meeting_place,
+                          trade_method = excluded.trade_method,
+                          memo = excluded.memo,
+                          payment_method = excluded.payment_method,
+                          updated_at = CURRENT_TIMESTAMP
             """,
-            (user_id, analysis_id, stage, decision),
+            (
+                user_id, analysis_id, stage, decision,
+                plan.get("meeting_at"), plan.get("meeting_place"),
+                plan.get("trade_method"), plan.get("memo"), plan.get("payment_method"),
+            ),
         )
         conn.commit()
         row = _execute(
@@ -377,6 +436,7 @@ def get_transactions(
     """거래 상태 목록 (analysis_history와 조인, 최신 변경순). stage/decision 각각 생략 시 미필터."""
     query = """
         SELECT t.analysis_id, t.stage, t.decision, t.updated_at,
+               t.meeting_at, t.meeting_place, t.trade_method, t.memo, t.payment_method,
                a.title, a.price, a.trust_score, a.risk_level,
                ld.title AS ld_title, ld.price AS ld_price
         FROM transaction_status t
@@ -405,6 +465,12 @@ def get_transactions(
             "risk_level": row["risk_level"],
             "stage": row["stage"],
             "decision": row["decision"],
+            # 거래 준비 정보 (문서 15) — 저장 안 했으면 전부 null
+            "meeting_at": _iso_z(row["meeting_at"]) if row["meeting_at"] else None,
+            "meeting_place": row["meeting_place"],
+            "trade_method": row["trade_method"],
+            "memo": row["memo"],
+            "payment_method": row["payment_method"],
             "updated_at": _iso_z(row["updated_at"]),
         }
         for row in rows
@@ -558,7 +624,23 @@ def get_mypage_summary(user_id: str, recent_limit: int = 5) -> dict:
             (user_id,),
         ).fetchone()["c"]
     recent_analyses, _ = get_history(user_id, page=1, size=recent_limit)
+    with get_db() as conn:
+        row = _execute(
+            conn, "SELECT id, nickname, created_at FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    user = (
+        {
+            "id": row["id"],
+            "nickname": row["nickname"],
+            # 프로필 이미지는 업로드 기능이 없어 항상 null (지어내지 않는다)
+            "profile_image_url": None,
+            "created_at": _iso_z(row["created_at"]),
+        }
+        if row
+        else None
+    )
     return {
+        "user": user,
         "analysis_count": analysis_count,
         "bookmark_count": bookmark_count,
         "comparison_count": comparison_count,
@@ -784,3 +866,89 @@ def migrate_guest(account_id: str, guest_id: str) -> dict:
         except Exception:
             conn.rollback()
             raise
+
+
+# ---------- 체크리스트 체크 상태 (Backend B, 문서 16) ----------
+
+def upsert_checklist_state(
+    user_id: str, analysis_id: int, checked: list[str], excluded: list[str]
+) -> str:
+    """체크/제외한 항목 id 목록 저장 (기기 바뀌어도 유지) → updated_at."""
+    ensure_user(user_id)
+    with get_db() as conn:
+        _execute(
+            conn,
+            """
+            INSERT INTO checklist_state (user_id, analysis_id, checked_json, excluded_json)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, analysis_id)
+            DO UPDATE SET checked_json = excluded.checked_json,
+                          excluded_json = excluded.excluded_json,
+                          updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, analysis_id, json.dumps(checked), json.dumps(excluded)),
+        )
+        conn.commit()
+        row = _execute(
+            conn,
+            "SELECT updated_at FROM checklist_state WHERE user_id = ? AND analysis_id = ?",
+            (user_id, analysis_id),
+        ).fetchone()
+    return _iso_z(row["updated_at"])
+
+
+def get_checklist_state(user_id: str, analysis_id: int) -> dict | None:
+    """저장된 체크 상태 (한 번도 저장 안 했으면 None)."""
+    with get_db() as conn:
+        row = _execute(
+            conn,
+            "SELECT * FROM checklist_state WHERE user_id = ? AND analysis_id = ?",
+            (user_id, analysis_id),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "item_id": row["analysis_id"],
+        "checked_item_ids": json.loads(row["checked_json"]),
+        "excluded_item_ids": json.loads(row["excluded_json"]),
+        "updated_at": _iso_z(row["updated_at"]),
+    }
+
+
+# ---------- 추천 근거 데이터 (Backend B, 문서 18) ----------
+
+def get_user_interest(user_id: str, limit: int = 5) -> dict:
+    """추천 근거 — 사용자가 실제로 분석/찜한 매물에서 관심사를 뽑는다.
+
+    행동 기록이 없으면 빈 값을 반환한다 (근거 없는 추천은 만들지 않는다).
+    """
+    with get_db() as conn:
+        rows = _execute(
+            conn,
+            """
+            SELECT a.title, a.raw_analysis_json, a.id, a.source_url,
+                   (SELECT COUNT(*) FROM bookmarks b
+                     WHERE b.analysis_id = a.id AND b.user_id = a.user_id) AS bookmarked
+            FROM analysis_history a
+            WHERE a.user_id = ? AND a.deleted_at IS NULL
+            ORDER BY a.id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    seen_ids, seen_urls, categories, titles = [], [], [], []
+    for row in rows:
+        seen_ids.append(row["id"])
+        if row["source_url"]:
+            seen_urls.append(row["source_url"])  # 이미 본 매물을 추천하지 않기 위함
+        raw = json.loads(row["raw_analysis_json"])
+        if raw.get("category"):
+            categories.append(raw["category"])
+        # 찜한 매물을 더 강한 관심 신호로 본다
+        titles.insert(0, row["title"]) if row["bookmarked"] else titles.append(row["title"])
+    return {
+        "analysis_ids": seen_ids,
+        "seen_urls": seen_urls,
+        "categories": categories,
+        "titles": titles,
+    }

@@ -151,6 +151,46 @@ listing_details 행이 존재하면 defects 배열은 빈 배열이어도 사용
 (계정은 토큰으로만 식별 — body로 계정 지정 불가). 단일 트랜잭션으로 6개 테이블 이전, 멱등(재호출 시 0건),
 실계정 이전 시도는 403(탈취 방지), 이전된 guest는 `users.migrated_to` 마킹으로 로그인·재가입·재이전 차단.
 
+### 프론트 요구사항 문서 P2~P3 반영 (2026-08-02, 문서 12~18)
+
+**매물 기본정보 수집 확장 (문서 13)** — `/analyze` 응답에 additive:
+`category`·`image_urls[]`·`trade_method`(IN_PERSON|DELIVERY|BOTH)·`seller_description`·`posted_at`·
+`seller_profile_url`. 번개장터는 대부분 채워지고, og태그 기반 플랫폼은 대부분 null —
+**플랫폼 페이지에 없는 정보는 지어내지 않고 null/빈 배열**을 반환한다.
+`posted_at` 은 ISO(UTC)로 준다. 번개장터가 주는 `"14시간 전"` 문자열은 저장하면 굳어버려서 안 쓴다 —
+프론트가 ISO 로 상대시간을 렌더할 것.
+
+**위험 신호 구조화 (문서 14)** — `risk_signals[{code,title,reason,severity,evidence}]` 추가.
+`code` 는 문구가 바뀌어도 유지되는 안정 식별자(`PRICE_TOO_LOW`·`PREPAY_REQUEST`·`EXTERNAL_PAYMENT_LINK`·
+`OFF_PLATFORM_CONTACT`·`NO_IN_PERSON`·`OVERSEAS_SHIPPING`·`URGENCY`·`NEW_SELLER`).
+비교 화면은 `title`만, 탭하면 `reason`/`evidence`(근거 원문)를 보여주면 된다.
+**`scam_warnings` 는 `[s.reason for s in risk_signals]` 와 문자열까지 동일** — 기존 프론트 안 깨짐.
+
+**상품 상태 구조화 (문서 12)** — `condition{grade, confidence, defects[{name,severity,evidence,source}]}`.
+`grade` 는 발견된 하자 중 최악 기준 A~D, 설명 자체가 없으면 null(임의 등급 금지).
+`confidence` 는 "설명이 얼마나 자세한가"일 뿐 실물 확인 신뢰도가 아니다.
+`source` 는 `DESCRIPTION`/`USER` 만 — **이미지 분석이 없으므로 `IMAGE` 는 절대 반환하지 않는다**(문서 지시).
+
+**거래 일정·메모 (문서 15)** — `POST/GET /api/v1/transaction` 에 `meeting_at`·`meeting_place`·
+`trade_method`·`memo`·`payment_method` 추가. stage/decision 과 같은 규칙으로 **생략하면 NULL 로 리셋**된다.
+
+**체크리스트 상태 동기화 (문서 16)** — `PUT/GET /api/v1/checklist-state` `{checked_item_ids, excluded_item_ids}`.
+저장한 적 없으면 404 대신 **빈 상태 200** (프론트가 분기 없이 그대로 사용).
+
+**마이페이지 계정 정보 (문서 17)** — `/mypage` 에 `user{id,nickname,profile_image_url,created_at}` 추가.
+`profile_image_url` 은 업로드 기능이 없어 항상 null. 없는 사용자면 `user: null`.
+
+**추천 매물 (문서 18)** — `GET /api/v1/recommendations`. 사용자가 **실제로 분석·찜한 매물**의 모델을
+기준으로 현재 판매중 매물을 찾아 `reason`(추천 근거)과 함께 반환한다. 이미 분석한 매물은 제외.
+**행동 기록이 없으면 빈 배열** — 문서가 지적한 "사실상 임의 추천"을 만들지 않기 위함.
+
+**시세 정확도 개선 (문서 11 후속)** — `comparables[]`(시세 근거 매물 최대 5건) 추가하면서 드러난 문제 2건 수정:
+① 분석 대상 자신이 자기 시세 표본에 포함돼 항상 "적정가"로 보이던 것 → `exclude_url` 로 제외
+② "아이폰 14 프로" 검색에 15/16/17 프로와 `[13,14,15,16]` 식 키워드 스터핑 낚시 매물이 섞이던 것
+→ 모델 번호 대조 + 스터핑 패턴 감지. **통계는 표본 부족 시 전체로 폴백하지만 comparables 는 항상 깨끗한 것만**
+(아이폰 14 시세라며 17 매물을 근거로 보여주는 게 표본 몇 개보다 나쁘다).
+`sold` 는 검색 API가 판매중만 반환해 확인 불가 → 항상 null (즉 실거래가 아닌 **호가**).
+
 ### 보안 점검 결과 (2026-08-02, 어드버세리얼 리뷰로 재현·수정)
 
 수정 완료 (전부 실제 재현 후 픽스):
@@ -269,3 +309,27 @@ FK 제약은 `PRAGMA foreign_keys=ON`으로 실제 적용됨 (2026-07-31 수정 
 
 - Analysis History, Product Rules, Scam Patterns, Checklist Templates 중 Product Rules·Scam Patterns·Checklist Templates는 Backend A 소관 (Rule Engine·체크리스트 생성 로직 참조용)
 - Analysis History는 Backend B 소관
+
+### 운영 개선 (2026-08-02, 시니어 감사 반영)
+
+데모·배포 중 실제로 물릴 수 있는 것들을 측정해서 고쳤다.
+
+- **로깅 추가** — 이전엔 외부 호출 실패를 전부 `except` 로 삼켜 fallback 해서 "왜 이상하죠?"에
+  답할 수단이 없었다. 이제 스크랩·시세검색·Solar·DB 마이그레이션 실패가 전부 로그에 남는다.
+  `LOG_LEVEL` 환경변수로 조절 (기본 INFO).
+- **외부 호출 TTL 캐시** (`app/cache.py`) — 스크랩 3분·시세검색 5분. 같은 매물 재분석이
+  **0.33초 → 0.01초**로 줄고, 번개장터 호출 빈도가 낮아져 데모 당일 차단 위험도 준다.
+  프로세스 메모리에만 있어 재시작하면 사라지고, **실패는 캐시하지 않는다**(일시 오류가 굳지 않게).
+  ⚠️ 테스트에서 캐시가 새면 유령 실패가 나므로 `tests/conftest.py` 가 매 테스트마다 비운다.
+- **N+1 제거** — `get_multiple_analyses` 가 id 하나당 커넥션을 열던 것을 단일 쿼리로.
+  (5건 조회 시 커넥션 6개 → 1개. SQLite 는 차이가 작지만 Supabase 는 왕복이 그대로 지연이 된다)
+- **SQLite WAL + busy timeout 15초** — 40건/20동시 요청 실패 0건 확인. (WAL 이전에도 재현되진
+  않았지만 데모 중 잠금이 터지면 치명적이라 보험으로 넣음. `.db-wal`/`.db-shm` 파일이 생긴다)
+- **`/health` 가 DB 를 실제로 확인** — 이전엔 DB 가 죽어도 200 이라 헬스체크가 무의미했다.
+  이제 실패 시 503 + `DB_UNAVAILABLE`. 응답에 `backend`(sqlite/postgres)·`auth_required` 도 포함.
+- **Solar 타임아웃 15초 → 8초** — AI 보강은 부가정보인데 15초를 붙잡으면 /analyze 전체가 느려진다.
+  최악 지연을 20초 아래로 (스크랩 6 + 시세 6 + Solar 8).
+- **requirements 버전 고정** — 배포 재현성. 올릴 때는 pytest 전체를 돌리고 올릴 것.
+
+**남은 리스크(의도적으로 안 함)**: 요청 레이트리밋 없음, 워커 여러 개면 캐시가 워커별로 분리됨,
+전체 요청 예산(overall timeout) 없음 — 전부 트래픽이 있어야 문제가 되는 것들이라 본선 이후 과제.
