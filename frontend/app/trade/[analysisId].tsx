@@ -522,11 +522,16 @@ function PriceComparisonBubble({ difference }: { difference: string }) {
 function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | undefined) {
   const target = proposal?.target_price ?? result.marketPrice.average;
   const difference = Math.abs(result.listing.price - target);
+  const reasons = [...(proposal?.reasons.length ? proposal.reasons : ['AI 가격 제안 근거는 지원 예정인 기능입니다.'])];
+  const range = proposal?.negotiation_range;
+  if (range) {
+    reasons.push(`협상 가능 범위: ${range.min.toLocaleString('ko-KR')}원 ~ ${range.max.toLocaleString('ko-KR')}원`);
+  }
   return {
     targetPrice: proposal?.target_price != null ? proposal.target_price.toLocaleString('ko-KR') : '지원 예정',
     listedPrice: result.listing.price.toLocaleString('ko-KR'),
     difference: `약 ${difference.toLocaleString('ko-KR')}원`,
-    reasons: proposal?.reasons.length ? proposal.reasons : ['AI 가격 제안 근거는 지원 예정인 기능입니다.'],
+    reasons,
     message: proposal?.message ?? '가격 제안 메시지는 지원 예정인 기능입니다.',
   };
 }
