@@ -43,7 +43,7 @@ def test_history_returns_items_newest_first(client):
     assert set(item.keys()) == {
         "item_id", "source_url", "title", "price", "trust_score", "risk_level", "created_at",
         # 2026-08-02 추가 — 스크래핑으로 못 얻으면 null인 목록 표시용 필드
-        "platform", "thumbnail_url", "location",
+        "platform", "thumbnail_url", "location", "posted_at",
     }
 
 
@@ -286,6 +286,8 @@ def test_mypage_empty_user_returns_zeros(client):
     r = client.get("/api/v1/mypage", params={"user_id": "brand-new-user"})
     data = r.json()["data"]
     assert data == {
+        # 존재하지 않는 사용자면 user 는 null (계정 정보는 2026-08-02 추가)
+        "user": None,
         "analysis_count": 0,
         "bookmark_count": 0,
         "comparison_count": 0,

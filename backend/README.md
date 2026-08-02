@@ -318,3 +318,10 @@ DB: `analysis_history.deleted_at` 컬럼(자동 마이그레이션) + `compariso
 `AUTH_SECRET=`(빈 값)이면 서명키가 빈 문자열이 되던 함정 → 폴백 수정 + 운영 모드 기동 가드 ③ SSRF —
 `/analyze`로 내부망·클라우드 메타데이터를 긁어오던 문제 → 공개 IP만 허용, 리다이렉트 매 홉 검사.
 잔여 리스크(브루트포스 제한·토큰 취소 없음 등)는 AGENTS.md "보안 점검 결과" 참고.
+
+**문서 12~18 반영 (2026-08-02)**: `/analyze` 에 `risk_signals`(구조화 위험신호)·`condition`(상태 등급/하자
+심각도)·`comparables`(시세 근거 매물)·`category`·`image_urls`·`trade_method`·`seller_description`·`posted_at` 추가.
+`POST/GET /api/v1/transaction` 에 거래 일정·장소·메모, 신규 `PUT/GET /api/v1/checklist-state`(체크 상태 동기화),
+`GET /api/v1/recommendations`(분석·찜 기록 기반 추천, 기록 없으면 빈 배열), `/mypage` 에 `user` 블록.
+전부 additive — 기존 필드(`scam_warnings`·`product_status`)는 문자열까지 동일하게 유지된다.
+상세는 AGENTS.md "프론트 요구사항 문서 P2~P3 반영" 참고.

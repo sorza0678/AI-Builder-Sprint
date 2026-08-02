@@ -49,6 +49,52 @@ class MarketPriceDetail(BaseModel):
     confidence: float | None = Field(default=None, description="0~1, 표본 30건이면 1.0")
 
 
+DefectSeverity = Literal["MINOR", "MODERATE", "MAJOR"]
+DefectSource = Literal["DESCRIPTION", "USER"]  # IMAGE 는 이미지 분석 구현 전까지 사용 금지
+
+
+class ConditionDefect(BaseModel):
+    name: str
+    severity: DefectSeverity | None = Field(default=None, description="판정 불가면 null")
+    evidence: str | None = Field(default=None, description="근거가 된 판매자 설명 조각")
+    source: DefectSource = Field(description="DESCRIPTION=판매자 설명에서 발견, USER=사용자가 확정")
+
+
+class ProductCondition(BaseModel):
+    """상품 상태 — 판매자 설명 텍스트 기준. 실물 확인을 대체하지 않는다."""
+    grade: str | None = Field(
+        default=None, description="A(하자 없음)~D(심각) — 판단 근거가 없으면 null"
+    )
+    confidence: float | None = Field(
+        default=None, description="0~1, 설명이 얼마나 자세한지 (실물 확인 신뢰도가 아님)"
+    )
+    defects: list[ConditionDefect] = Field(default_factory=list)
+
+
+class RiskSignal(BaseModel):
+    """구조화된 위험 신호 — 비교 화면은 title 만, 탭하면 reason/evidence 를 보여주면 된다."""
+    code: str = Field(
+        description="안정적 식별자 (PRICE_TOO_LOW·PREPAY_REQUEST 등) — 문구가 바뀌어도 유지",
+        examples=["PRICE_TOO_LOW"],
+    )
+    title: str = Field(examples=["시세 대비 37% 저렴"])
+    reason: str = Field(description="상세 설명 (scam_warnings 의 문자열과 동일)")
+    severity: RiskLevel
+    evidence: str | None = Field(default=None, description="근거가 된 원문·수치 (없으면 null)")
+
+
+class Comparable(BaseModel):
+    """시세 계산의 근거가 된 실제 매물 (판매중 매물의 호가 — 실거래가 아님)."""
+    title: str
+    price: int
+    platform: str
+    url: str | None
+    location: str | None = None
+    sold: bool | None = Field(
+        default=None, description="판매완료 여부 — 검색 API가 판매중만 반환해 확인 불가라 항상 null"
+    )
+
+
 class AnalyzeData(BaseModel):
     item_id: int
     title: str
@@ -56,13 +102,29 @@ class AnalyzeData(BaseModel):
     market_price_avg: int
     trust_score: int = Field(ge=0, le=100)
     risk_level: RiskLevel
-    scam_warnings: list[str]
-    product_status: ProductStatus
-    # ↓ 2026-08-02 추가 (additive — 구버전 분석 기록·mock 데이터에서는 null)
+    scam_warnings: list[str] = Field(description="(구버전 호환) risk_signals 의 reason 목록")
+    product_status: ProductStatus = Field(description="(구버전 호환) condition 의 요약")
+    # ↓ 2026-08-02 추가 (additive — 구버전 분석 기록·mock 데이터에서는 null/빈 배열)
+    risk_signals: list[RiskSignal] = Field(
+        default_factory=list, description="구조화된 위험 신호 (문자열 파싱 불필요)"
+    )
+    condition: ProductCondition | None = None
     market_price: MarketPriceDetail | None = None
+    comparables: list[Comparable] = Field(
+        default_factory=list, description="시세 근거 매물 최대 5건 (실측 실패 시 빈 배열)"
+    )
     platform: str | None = None
     thumbnail_url: str | None = None
     location: str | None = None
+    posted_at: datetime | None = Field(
+        default=None, description="매물 등록 시각(UTC) — 프론트에서 '4일 전'으로 렌더. 수집 못 하면 null"
+    )
+    # 매물 기본 정보 — 플랫폼이 주는 것만 (없으면 null/빈 배열, 지어내지 않는다)
+    category: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
+    trade_method: Literal["IN_PERSON", "DELIVERY", "BOTH"] | None = None
+    seller_description: str | None = Field(default=None, description="판매자가 쓴 원문 설명")
+    seller_profile_url: str | None = None
 
 
 class AnalyzeSuccess(BaseModel):
@@ -171,11 +233,14 @@ class HistoryItem(BaseModel):
     price: int = Field(description="사용자가 화면2에서 수정했으면 수정값")
     trust_score: int
     risk_level: RiskLevel
-    created_at: datetime
+    created_at: datetime = Field(description="분석을 실행한 시각")
     # ↓ 스크래핑으로 수집된 경우에만 값 존재 (구버전 기록·mock은 null)
     platform: str | None = None
     thumbnail_url: str | None = None
     location: str | None = None
+    posted_at: datetime | None = Field(
+        default=None, description="매물이 플랫폼에 등록된 시각 (created_at 과 다름)"
+    )
 
 
 class HistoryData(BaseModel):
@@ -197,14 +262,32 @@ TransactionStageEnum = Literal["BEFORE_CONTACT", "CONTACTING", "SCHEDULED", "COM
 TransactionDecisionEnum = Literal["CONSIDERING", "HOLD", "EXCLUDED"]
 
 
+TradeMethodEnum = Literal["IN_PERSON", "DELIVERY"]
+
+
 class TransactionRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
     item_id: int = Field(examples=[1])
     stage: TransactionStageEnum = Field(examples=["CONTACTING"])
     decision: TransactionDecisionEnum | None = Field(default=None, examples=["CONSIDERING"])
+    # ↓ 거래 준비 정보 (문서 15). stage/decision 과 마찬가지로 생략하면 NULL 로 리셋된다
+    meeting_at: datetime | None = Field(default=None, description="약속 일시")
+    meeting_place: str | None = Field(default=None, max_length=200, examples=["강남역 11번 출구"])
+    trade_method: TradeMethodEnum | None = None
+    memo: str | None = Field(default=None, max_length=2000, description="개인 메모")
+    payment_method: str | None = Field(default=None, max_length=50, examples=["현금"])
 
 
-class TransactionData(BaseModel):
+class TransactionPlan(BaseModel):
+    """거래 준비 정보 — 저장 안 했으면 전부 null."""
+    meeting_at: datetime | None = None
+    meeting_place: str | None = None
+    trade_method: TradeMethodEnum | None = None
+    memo: str | None = None
+    payment_method: str | None = None
+
+
+class TransactionData(TransactionPlan):
     item_id: int
     stage: TransactionStageEnum
     decision: TransactionDecisionEnum | None
@@ -217,7 +300,7 @@ class TransactionSuccess(BaseModel):
     error: None = None
 
 
-class TransactionListItem(BaseModel):
+class TransactionListItem(TransactionPlan):
     item_id: int
     title: str
     price: int
@@ -369,7 +452,17 @@ class ListingSuccess(BaseModel):
 
 # ---------- /mypage ----------
 
+class MyPageUser(BaseModel):
+    id: str
+    nickname: str | None = None
+    profile_image_url: str | None = Field(
+        default=None, description="프로필 이미지 업로드 미지원 — 항상 null"
+    )
+    created_at: datetime
+
+
 class MyPageData(BaseModel):
+    user: MyPageUser | None = None
     analysis_count: int
     bookmark_count: int
     comparison_count: int
@@ -398,10 +491,19 @@ class AnalysisDetailData(BaseModel):
     risk_level: RiskLevel
     scam_warnings: list[str]
     product_status: ProductStatus
+    risk_signals: list[RiskSignal] = Field(default_factory=list)
+    condition: ProductCondition | None = None
     market_price: MarketPriceDetail | None = None
+    comparables: list[Comparable] = Field(default_factory=list)
     platform: str | None = None
     thumbnail_url: str | None = None
     location: str | None = None
+    posted_at: datetime | None = None
+    category: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
+    trade_method: Literal["IN_PERSON", "DELIVERY", "BOTH"] | None = None
+    seller_description: str | None = None
+    seller_profile_url: str | None = None
     listing_details: ListingData | None = Field(
         default=None, description="화면2에서 확인/수정한 상세 — 아직 없으면 null"
     )
@@ -556,4 +658,48 @@ class MigrateGuestData(BaseModel):
 class MigrateGuestSuccess(BaseModel):
     ok: Literal[True] = True
     data: MigrateGuestData
+    error: None = None
+
+
+# ---------- /checklist-state (체크 상태 서버 동기화, 문서 16) ----------
+
+class ChecklistStateRequest(BaseModel):
+    user_id: str = Field(examples=["demo-user-1"])
+    item_id: int = Field(examples=[1])
+    checked_item_ids: list[str] = Field(default_factory=list, examples=[["on_site-1"]])
+    excluded_item_ids: list[str] = Field(default_factory=list)
+
+
+class ChecklistStateData(BaseModel):
+    item_id: int
+    checked_item_ids: list[str]
+    excluded_item_ids: list[str]
+    updated_at: datetime | None = Field(default=None, description="한 번도 저장 안 했으면 null")
+
+
+class ChecklistStateSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: ChecklistStateData
+    error: None = None
+
+
+# ---------- /recommendations (추천 매물, 문서 18) ----------
+
+class RecommendedItem(Comparable):
+    reason: str = Field(description="왜 추천됐는지 — 근거 없는 추천은 반환하지 않는다")
+
+
+class RecommendationData(BaseModel):
+    items: list[RecommendedItem] = Field(
+        default_factory=list, description="분석·찜 기록이 없으면 빈 배열 (임의 추천 금지)"
+    )
+    total: int
+    basis: list[str] = Field(
+        default_factory=list, description="추천 근거가 된 사용자의 최근 관심 매물 제목"
+    )
+
+
+class RecommendationSuccess(BaseModel):
+    ok: Literal[True] = True
+    data: RecommendationData
     error: None = None

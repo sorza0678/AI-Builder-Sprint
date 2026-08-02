@@ -1,9 +1,12 @@
+# 배포 재현성을 위해 현재 검증된 버전으로 고정 (테스트 130개 통과 기준).
+# 올릴 때는 pytest 전체를 돌려보고 올릴 것.
 # --- 공통 (A: 분석 API) ---
-fastapi>=0.115
-uvicorn[standard]>=0.30
-httpx>=0.27
-python-dotenv>=1.0
-pytest>=8.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+httpx==0.28.1
+python-dotenv==1.2.2
 # --- B: 서비스·DB ---
-psycopg2-binary   # Postgres(Supabase) 드라이버 — app/db.py 가 raw 쿼리로 사용
-ruff              # 린터 (dev)
+psycopg2-binary==2.9.12   # Postgres(Supabase) 드라이버 — app/db.py 가 raw 쿼리로 사용
+# --- 개발용 ---
+pytest==9.1.1
+ruff==0.16.1
