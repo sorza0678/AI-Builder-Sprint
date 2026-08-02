@@ -14,40 +14,6 @@ export interface TradeChecklistItem {
   group: 'before' | 'onsite' | 'payment';
 }
 
-// TODO: 백엔드 거래 준비 API가 확정되면 화면 전용 질문을 실제 응답으로 교체
-export const TRADE_QUESTIONS: TradeQuestion[] = [
-  {
-    id: 'manufacture-year',
-    text: '정확한 제조 연도가 어떻게 되나요?',
-    reason: '제조 연도에 따라 제품의 시세와 차량 호환 여부가 달라질 수 있어요.',
-    required: true,
-  },
-  {
-    id: 'additional-defects',
-    text: '스크래치 외에 추가 하자가 있나요?',
-    reason: '사진에 보이지 않는 변형이나 수리 이력이 있으면 추가 비용이 발생할 수 있어요.',
-    required: true,
-  },
-  {
-    id: 'meeting-location',
-    text: '직거래 장소는 어디인가요?',
-    reason: '제품을 충분히 확인할 수 있는 밝고 안전한 장소인지 미리 확인하는 것이 좋아요.',
-    required: true,
-  },
-  {
-    id: 'wheel-only',
-    text: '타이어 없이 휠만 판매하는 게 맞나요?',
-    reason: '판매 범위를 정확히 확인하면 예상하지 못한 추가 구매 비용을 줄일 수 있어요.',
-    required: false,
-  },
-  {
-    id: 'bolt-pattern',
-    text: '5x114.3 볼팅 패턴이 맞나요?',
-    reason: '차량과 볼팅 패턴이 맞지 않으면 휠을 장착할 수 없어요.',
-    required: false,
-  },
-];
-
 export const TRADE_CHECKLIST_ITEMS: TradeChecklistItem[] = [
   {
     id: 'listing-match',

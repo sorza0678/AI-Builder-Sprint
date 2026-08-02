@@ -122,9 +122,15 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
       : '',
     result.listing.sellerDescription,
   ].filter(Boolean);
+  const defectSeverityLabel: Record<NonNullable<AnalysisResult['conditionDefects'][number]['severity']>, string> = {
+    MINOR: '경미', MODERATE: '보통', MAJOR: '심각',
+  };
   const photoItems = result.conditionGradeSupported === false
     ? ['이미지 상세 분석은 지원 예정인 기능입니다.']
-    : [`${result.listing.color} 색상`, `${result.listing.sizeOrCapacity} 규격`, `${result.listing.usagePeriod} 사용`];
+    : result.conditionDefects.length > 0
+      ? result.conditionDefects.map((defect) =>
+          defect.severity ? `${defect.name} (${defectSeverityLabel[defect.severity]})` : defect.name)
+      : ['확인된 하자 없음'];
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -305,11 +311,30 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
                 value={result.marketPriceRangeSupported === false ? '미지원' : `${result.marketPrice.min.toLocaleString('ko-KR')} –\n${formatPrice(result.marketPrice.max)}`}
               />
               <DetailRow
+                label="시세 표본"
+                value={result.marketPriceRangeSupported === false || result.marketPrice.sampleCount === 0
+                  ? '미지원'
+                  : `${result.marketPrice.sampleCount}건${result.marketPrice.confidence != null ? ` (신뢰도 ${Math.round(result.marketPrice.confidence * 100)}%)` : ''}`}
+              />
+              <DetailRow
                 label="예상 감가 요인"
                 value={result.listing.defects.join(', ') || '특이사항 없음'}
               />
             </View>
           </View>
+
+          {result.comparables.length > 0 && (
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>시세 근거 매물</Text>
+              <View style={styles.bulletList}>
+                {result.comparables.slice(0, 5).map((comparable) => (
+                  <Text key={`${comparable.platform}-${comparable.title}`} style={styles.bulletText}>
+                    ·  {comparable.title} · {formatPrice(comparable.price)} ({comparable.platform})
+                  </Text>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
 
         <View style={styles.divider} />

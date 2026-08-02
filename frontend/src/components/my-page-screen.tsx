@@ -7,7 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
 import { getMyPageSummary } from '@/src/services/mypage-service';
 import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
-import type { HistoryItem, MyPageData } from '@/src/services/api-types';
+import { getRecommendations } from '@/src/services/recommendation-service';
+import type { HistoryItem, MyPageData, RecommendedItem } from '@/src/services/api-types';
 import { getAuthSession, signOut } from '@/src/storage/auth-session-storage';
 
 interface MenuItem {
@@ -123,6 +124,49 @@ function ListingSection({
   );
 }
 
+function RecommendedListingRow({ item }: { item: RecommendedItem }) {
+  return (
+    <Pressable
+      accessibilityLabel={`${item.title} 분석하기`}
+      accessibilityRole="button"
+      disabled={!item.url}
+      onPress={() => item.url && router.push({ pathname: '/analysis-input', params: { url: item.url } })}
+      style={({ pressed }) => [styles.listingCard, pressed && styles.pressed]}>
+      <View style={styles.listingInfo}>
+        <Text numberOfLines={1} style={styles.listingLocation}>
+          {item.platform}
+        </Text>
+        <View style={styles.listingDetails}>
+          <Text style={styles.listingPrice}>{item.price.toLocaleString('ko-KR')}원</Text>
+          <Text numberOfLines={1} style={styles.listingTitle}>
+            {item.title}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.listingFooter}>
+        <Text numberOfLines={1} style={styles.listingTime}>{item.reason}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function RecommendationSection({ items }: { items: RecommendedItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <View style={styles.listingSection}>
+      <Text style={styles.sectionTitle}>추천 매물</Text>
+      <ScrollView
+        contentContainerStyle={styles.listingRow}
+        horizontal
+        showsHorizontalScrollIndicator={false}>
+        {items.map((item) => (
+          <RecommendedListingRow item={item} key={`${item.platform}-${item.title}`} />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 function MenuSection({ title, items }: { title: string; items: MenuItem[] }) {
   return (
     <View style={styles.menuSection}>
@@ -155,6 +199,7 @@ export function MyPageScreen() {
   const [summary, setSummary] = useState<MyPageData>();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [bookmarkedIds, setBookmarkedIds] = useState<Set<number>>(new Set());
+  const [recommendations, setRecommendations] = useState<RecommendedItem[]>([]);
   const [accountId, setAccountId] = useState('');
   useFocusEffect(useCallback(() => {
     void getAuthSession().then((session) => {
@@ -163,11 +208,12 @@ export function MyPageScreen() {
         return;
       }
       setAccountId(session.accountId);
-      void Promise.all([getMyPageSummary(), getBookmarks()])
-        .then(([nextSummary, bookmarks]) => {
+      void Promise.all([getMyPageSummary(), getBookmarks(), getRecommendations()])
+        .then(([nextSummary, bookmarks, recommendationData]) => {
           setSummary(nextSummary);
           setHistory(nextSummary.recent_analyses);
           setBookmarkedIds(new Set(bookmarks.items.map((item) => item.item_id)));
+          setRecommendations(recommendationData.items);
         })
         .catch(() => undefined);
     });
@@ -187,6 +233,8 @@ export function MyPageScreen() {
       bookmark_count: Math.max(0, current.bookmark_count + (bookmarked ? -1 : 1)),
     } : current);
   };
+
+  const displayName = summary?.user?.nickname ?? summary?.user?.id ?? accountId;
 
   const accountItems: MenuItem[] = [
     { label: '설정', icon: require('@/assets/images/sidebar/settings.svg') },
@@ -225,7 +273,7 @@ export function MyPageScreen() {
             source={require('@/assets/images/mypage/avatar.svg')}
             style={styles.avatar}
           />
-          <Text style={styles.userName}>{accountId ? `${accountId} 님` : '불러오는 중...'}</Text>
+          <Text style={styles.userName}>{displayName ? `${displayName} 님` : '불러오는 중...'}</Text>
           <Pressable
             accessibilityLabel="내 정보 수정"
             accessibilityRole="button"
@@ -260,6 +308,7 @@ export function MyPageScreen() {
             title="최근 분석 기록"
           />
           {history.length === 0 && <Text style={styles.emptyText}>아직 분석 기록이 없습니다.</Text>}
+          <RecommendationSection items={recommendations} />
         </View>
 
         <View style={styles.separator} />

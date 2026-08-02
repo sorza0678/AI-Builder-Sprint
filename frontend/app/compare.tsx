@@ -21,8 +21,24 @@ import { addComparisonItem, compareItems, getComparisonHistoryById, getCompariso
 import { getHistory } from '@/src/services/history-service';
 import type { AnalyzeData, HistoryItem } from '@/src/services/api-types';
 import { getAnalysisDetailData } from '@/src/services/analysis-service';
+import { riskMap } from '@/src/utils/risk-level';
 
 const PRIORITIES: ComparisonPriority[] = ['price', 'safety', 'condition', 'components'];
+
+function riskLabel(item: AnalyzeData): string {
+  const level = riskMap[item.risk_level];
+  const count = item.risk_signals?.length ?? item.scam_warnings.length;
+  if (level === 'LOW') return '위험 신호 없음';
+  if (level === 'MEDIUM') return `주의 ${count}건`;
+  return `위험 ${count}건`;
+}
+
+function riskDetail(item: AnalyzeData): string | undefined {
+  if (item.risk_signals?.length) {
+    return item.risk_signals.map((signal) => signal.reason).join('\n');
+  }
+  return item.scam_warnings.join(', ') || undefined;
+}
 
 export default function CompareScreen() {
   const { historyId, reset } = useLocalSearchParams<{ historyId?: string; reset?: string }>();
@@ -57,7 +73,10 @@ export default function CompareScreen() {
           risk_level: snapshot.risk_level,
           scam_warnings: detail?.scam_warnings ?? [],
           product_status: detail?.product_status ?? { defects_found: [], missing_components: [] },
+          risk_signals: detail?.risk_signals ?? [],
+          condition: detail?.condition ?? null,
           market_price: detail?.market_price,
+          comparables: detail?.comparables ?? [],
           platform: detail?.platform,
           thumbnail_url: detail?.thumbnail_url,
           location: detail?.location,
@@ -110,12 +129,12 @@ export default function CompareScreen() {
     values: {
       price: { primary: `${item.price.toLocaleString('ko-KR')}원`, secondary: `평균 시세 ${item.market_price_avg.toLocaleString('ko-KR')}원` },
       sellerReliability: { primary: item.market_price_avg > 0 ? `${Math.round(((item.price - item.market_price_avg) / item.market_price_avg) * 100)}%` : '미지원' },
-      condition: { primary: '미지원' },
+      condition: { primary: item.condition?.grade ?? '미지원' },
       defects: { primary: item.product_status.defects_found.join(', ') || '확인된 하자 없음' },
       components: { primary: item.product_status.missing_components.length ? `누락: ${item.product_status.missing_components.join(', ')}` : '누락 정보 없음' },
       tradeMethod: { primary: '미지원' },
       sellerTrust: { primary: '미지원' },
-      risk: { primary: item.risk_level, secondary: item.scam_warnings.join(', ') || undefined },
+      risk: { primary: riskLabel(item), secondary: riskDetail(item) },
       needsCheck: { primary: `${item.product_status.defects_found.length + item.product_status.missing_components.length + item.scam_warnings.length}개 항목` },
     },
   })), [apiItems]);

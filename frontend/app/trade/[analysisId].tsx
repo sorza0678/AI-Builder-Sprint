@@ -16,18 +16,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ErrorState, LoadingState } from '@/src/components/common';
 import { Text } from '@/src/components/pretendard-text';
 import {
-  TRADE_QUESTIONS,
   TradeChecklistItem,
   TradeMethod,
   TradeQuestion,
 } from '@/src/mocks/trade-preparation';
 import { getAnalysisResult } from '@/src/services/analysis-service';
-import { getChecklist, getInquiryScript, getTransactions, setTransaction } from '@/src/services/trade-service';
-import type { ApiTransactionDecision, ApiTransactionStage } from '@/src/services/api-types';
+import { fetchPriceProposal, getChecklist, getInquiryScript, getTransactions, setTransaction } from '@/src/services/trade-service';
+import { getChecklistState, putChecklistState } from '@/src/services/checklist-state-service';
+import type { ApiChecklistGroupKey, ApiTransactionDecision, ApiTransactionStage, PriceProposalData } from '@/src/services/api-types';
 import { addBookmark, getBookmarks, removeBookmark } from '@/src/services/bookmark-service';
 import { AnalysisResult } from '@/src/types/marketplace';
 import { markTradeSelection } from '@/src/repositories/trade-selection-repository';
-import { getTradeChecklistState, saveTradeChecklistState } from '@/src/repositories/trade-checklist-state-repository';
+import { getTradeMethod, saveTradeMethod } from '@/src/repositories/trade-checklist-state-repository';
 
 const STEPS = ['문의', '확인', '가격', '진행'] as const;
 type TradeStep = 'inquiry' | 'check' | 'price' | 'progress';
@@ -57,6 +57,12 @@ const CHECKLIST_GROUPS: {
   { key: 'onsite', title: '현장에서 확인' },
   { key: 'payment', title: '결제 전에 확인' },
 ];
+
+const CHECKLIST_GROUP_KEY_MAP: Record<ApiChecklistGroupKey, TradeChecklistItem['group']> = {
+  BEFORE_TRADE: 'before',
+  ON_SITE: 'onsite',
+  BEFORE_PAYMENT: 'payment',
+};
 
 const TRADE_METHODS: { value: TradeMethod; label: string }[] = [
   { value: 'inPerson', label: '직거래' },
@@ -195,26 +201,26 @@ function CheckStepContent({ items, title, itemId }: { items: TradeChecklistItem[
   useEffect(() => {
     let active = true;
     checklistStateLoaded.current = false;
-    getTradeChecklistState(itemId).then((stored) => {
+    Promise.all([
+      getTradeMethod(itemId),
+      getChecklistState(itemId).catch(() => undefined),
+    ]).then(([storedMethod, state]) => {
       if (!active) return;
-      if (stored) {
-        setMethod(stored.tradeMethod);
-        setCheckedIds(items.filter((item) => stored.checkedTexts.includes(item.text)).map((item) => item.id));
-        setExcludedIds(items.filter((item) => stored.excludedTexts.includes(item.text)).map((item) => item.id));
+      if (storedMethod) setMethod(storedMethod);
+      if (state) {
+        setCheckedIds(state.checked_item_ids);
+        setExcludedIds(state.excluded_item_ids);
       }
       checklistStateLoaded.current = true;
     });
     return () => { active = false; };
-  }, [itemId, items]);
+  }, [itemId]);
 
   useEffect(() => {
     if (!checklistStateLoaded.current) return;
-    void saveTradeChecklistState(itemId, {
-      tradeMethod: method,
-      checkedTexts: items.filter((item) => checkedIds.includes(item.id)).map((item) => item.text),
-      excludedTexts: items.filter((item) => excludedIds.includes(item.id)).map((item) => item.text),
-    });
-  }, [checkedIds, excludedIds, itemId, items, method]);
+    void saveTradeMethod(itemId, method);
+    void putChecklistState(itemId, checkedIds, excludedIds).catch(() => undefined);
+  }, [checkedIds, excludedIds, itemId, method]);
 
   const toggleChecked = (item: TradeChecklistItem): void => {
     if (isChecklistItemDisabled(item, method)) {
@@ -314,7 +320,7 @@ function CheckStepContent({ items, title, itemId }: { items: TradeChecklistItem[
             <View key={group.key}>
               <Text style={styles.checkGroupTitle}>{group.title}</Text>
               {items.every((item) => item.group !== group.key) ? (
-                <Text style={styles.unsupportedChecklistText}>그룹별 체크리스트는 지원 예정인 기능입니다.</Text>
+                <Text style={styles.unsupportedChecklistText}>확인할 항목이 없습니다.</Text>
               ) : null}
               <View style={styles.checkItems}>
                 {items.filter((item) => item.group === group.key).map(
@@ -493,20 +499,28 @@ function PriceComparisonBubble({ difference }: { difference: string }) {
   );
 }
 
-function getPriceProposal(result: AnalysisResult) {
-  const target = result.marketPrice.average;
+function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | undefined) {
+  const target = proposal?.target_price ?? result.marketPrice.average;
   const difference = Math.abs(result.listing.price - target);
   return {
-    targetPrice: '지원 예정',
+    targetPrice: proposal?.target_price != null ? proposal.target_price.toLocaleString('ko-KR') : '지원 예정',
     listedPrice: result.listing.price.toLocaleString('ko-KR'),
     difference: `약 ${difference.toLocaleString('ko-KR')}원`,
-    reasons: ['AI 가격 제안 근거는 지원 예정인 기능입니다.'],
-    message: '가격 제안 메시지는 지원 예정인 기능입니다.',
+    reasons: proposal?.reasons.length ? proposal.reasons : ['AI 가격 제안 근거는 지원 예정인 기능입니다.'],
+    message: proposal?.message ?? '가격 제안 메시지는 지원 예정인 기능입니다.',
   };
 }
 
-function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; onCopyMessage: () => void }) {
-  const proposal = getPriceProposal(result);
+function PriceStepContent({
+  result,
+  proposal,
+  onCopyMessage,
+}: {
+  result: AnalysisResult;
+  proposal: PriceProposalData | undefined;
+  onCopyMessage: () => void;
+}) {
+  const view = buildPriceProposalView(result, proposal);
   return (
     <View style={styles.pricePage}>
       <View style={styles.priceMain}>
@@ -525,7 +539,7 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
               imageFrameStyle={styles.targetPriceImageFrame}
               imageStyle={styles.targetPriceImage}
               label="제안해볼 가격"
-              price={proposal.targetPrice}
+              price={view.targetPrice}
               watermark="TARGET"
             />
             <PriceCard
@@ -533,18 +547,18 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
               imageFrameStyle={styles.listedPriceImageFrame}
               imageStyle={styles.listedPriceImage}
               label="현재 판매가"
-              price={proposal.listedPrice}
+              price={view.listedPrice}
               watermark="LISTED"
             />
           </View>
 
-          <PriceComparisonBubble difference={proposal.difference} />
+          <PriceComparisonBubble difference={view.difference} />
         </View>
 
         <View style={styles.priceReasonSection}>
           <Text style={styles.priceSectionTitle}>이 가격을 제안한 이유</Text>
           <View style={styles.priceReasonsCard}>
-            {proposal.reasons.map((reason) => (
+            {view.reasons.map((reason) => (
               <Text key={reason} style={styles.priceReasonText}>· {reason}</Text>
             ))}
           </View>
@@ -554,7 +568,7 @@ function PriceStepContent({ result, onCopyMessage }: { result: AnalysisResult; o
       <View style={styles.priceMessageSection}>
         <Text style={styles.groupTitle}>가격 제안 메시지</Text>
         <View style={styles.priceMessageCard}>
-          <Text style={styles.priceMessageText}>{proposal.message}</Text>
+          <Text style={styles.priceMessageText}>{view.message}</Text>
           <Pressable
             accessibilityLabel="가격 제안 메시지 복사"
             accessibilityRole="button"
@@ -744,7 +758,9 @@ export default function TradePreparationScreen() {
   const [activeStep, setActiveStep] = useState<TradeStep>('inquiry');
   const [favorite, setFavorite] = useState(false);
   const [serverMessage, setServerMessage] = useState('');
+  const [serverQuestions, setServerQuestions] = useState<TradeQuestion[]>([]);
   const [serverChecklist, setServerChecklist] = useState<TradeChecklistItem[]>([]);
+  const [priceProposal, setPriceProposal] = useState<PriceProposalData>();
   const [transactionStage, setTransactionStage] = useState<ApiTransactionStage | null>(null);
   const [transactionDecision, setTransactionDecision] = useState<ApiTransactionDecision | null>(null);
 
@@ -761,18 +777,29 @@ export default function TradePreparationScreen() {
       getChecklist(Number(id)),
       getBookmarks(),
       getTransactions(),
+      fetchPriceProposal(Number(id)),
     ])
-      .then(([analysisResult, inquiryResult, checklistResult, bookmarkResult, transactionResult]) => {
+      .then(([analysisResult, inquiryResult, checklistResult, bookmarkResult, transactionResult, priceProposalResult]) => {
         if (active) {
           if (analysisResult.status === 'fulfilled') setResult(analysisResult.value);
-          if (inquiryResult.status === 'fulfilled') setServerMessage(inquiryResult.value.script);
-          if (checklistResult.status === 'fulfilled') {
-            setServerChecklist(checklistResult.value.checklist.map((text, index) => ({
-              id: `server-${index}`,
-              text,
-              description: '상세 설명은 지원 예정인 기능입니다.',
-              group: 'before',
+          if (inquiryResult.status === 'fulfilled') {
+            setServerMessage(inquiryResult.value.combined_script);
+            setServerQuestions(inquiryResult.value.questions.map((question) => ({
+              id: question.id,
+              text: question.text,
+              reason: question.reason ?? '',
+              required: true,
             })));
+          }
+          if (checklistResult.status === 'fulfilled') {
+            setServerChecklist(checklistResult.value.groups.flatMap((group) =>
+              group.items.map((item) => ({
+                id: item.id,
+                text: item.text,
+                description: item.reason ?? '설명이 제공되지 않았어요.',
+                group: CHECKLIST_GROUP_KEY_MAP[group.key],
+              })),
+            ));
           }
           if (bookmarkResult.status === 'fulfilled') {
             setFavorite(bookmarkResult.value.items.some((item) => item.item_id === Number(id)));
@@ -782,6 +809,7 @@ export default function TradePreparationScreen() {
             setTransactionStage(transaction?.stage ?? null);
             setTransactionDecision(transaction?.decision ?? null);
           }
+          if (priceProposalResult.status === 'fulfilled') setPriceProposal(priceProposalResult.value);
         }
       })
       .finally(() => {
@@ -795,26 +823,27 @@ export default function TradePreparationScreen() {
     };
   }, [id]);
 
+  const displayedQuestions = serverQuestions;
   const selectedQuestions = useMemo(
-    () => TRADE_QUESTIONS.filter((question) => selectedIds.includes(question.id)),
-    [selectedIds],
+    () => displayedQuestions.filter((question) => selectedIds.includes(question.id)),
+    [displayedQuestions, selectedIds],
   );
-  const displayedQuestions: typeof TRADE_QUESTIONS = [];
 
   const message = useMemo(() => {
-    const questions = selectedQuestions
-      .map((question, index) => `${index + 1}. ${question.text}`)
-      .join('\n');
+    if (selectedQuestions.length > 0) {
+      const questions = selectedQuestions
+        .map((question, index) => `${index + 1}. ${question.text}`)
+        .join('\n');
+      return [
+        '안녕하세요! 제품이 마음에 들어 문의드려요 😊',
+        questions,
+        '확인해 주시면 감사하겠습니다!',
+      ].join('\n');
+    }
     if (serverMessage) {
       return serverMessage;
     }
-    return [
-      '안녕하세요! 제품이 마음에 들어 문의드려요 😊',
-      questions,
-      '확인해 주시면 감사하겠습니다!',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    return '안녕하세요! 제품이 마음에 들어 문의드려요 😊';
   }, [selectedQuestions, serverMessage]);
 
   const toggleQuestion = (questionId: string): void => {
@@ -843,7 +872,7 @@ export default function TradePreparationScreen() {
 
   const copyPriceMessage = async (): Promise<void> => {
     try {
-      if (result) await Clipboard.setStringAsync(getPriceProposal(result).message);
+      if (result) await Clipboard.setStringAsync(buildPriceProposalView(result, priceProposal).message);
     } catch {
       // 클립보드 접근 실패 시 화면 상태는 유지합니다.
     }
@@ -954,7 +983,9 @@ export default function TradePreparationScreen() {
           <View style={styles.questionGroup}>
             <Text style={styles.groupTitle}>꼭 물어볼 질문</Text>
             <View style={styles.questionList}>
-              <Text style={styles.unsupportedQuestionText}>지원 예정인 기능입니다.</Text>
+              {displayedQuestions.every((question) => !question.required) ? (
+                <Text style={styles.unsupportedQuestionText}>확인할 질문이 없습니다.</Text>
+              ) : null}
               {displayedQuestions.filter((question) => question.required).map((question) => (
                 <QuestionCard
                   key={question.id}
@@ -1007,7 +1038,7 @@ export default function TradePreparationScreen() {
         ) : activeStep === 'check' ? (
           <CheckStepContent itemId={Number(result.id)} items={serverChecklist} title={result.listing.title} />
         ) : activeStep === 'price' ? (
-          <PriceStepContent result={result} onCopyMessage={copyPriceMessage} />
+          <PriceStepContent onCopyMessage={copyPriceMessage} proposal={priceProposal} result={result} />
         ) : (
           <ProgressStepContent
             decision={transactionDecision}
