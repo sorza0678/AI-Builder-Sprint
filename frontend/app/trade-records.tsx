@@ -1,71 +1,522 @@
-import { useCallback, useEffect, useState } from 'react';
-import { router } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Href, router } from 'expo-router';
+import { Image } from 'expo-image';
+import {
+  FlatList,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text } from '@/src/components/pretendard-text';
 import { getTradeRecords } from '@/src/repositories/trade-record-repository';
 import type { TradeRecordDraft } from '@/src/storage/storage-types';
+import type { TradeStatus } from '@/src/types/marketplace';
+
+type TradeFilter = 'ALL' | TradeStatus;
+
+interface TradeHistoryItem {
+  id: string;
+  analysisHref: Href;
+  title: string;
+  price: string;
+  status: TradeStatus;
+  badge?: string;
+}
+
+const assets = {
+  arrow: require('@/assets/images/recent-analyses/arrow-left.svg'),
+  search: require('@/assets/images/recent-analyses/search.svg'),
+};
+
+const FILTERS: { label: string; value: TradeFilter }[] = [
+  { label: '전체', value: 'ALL' },
+  { label: '문의 전', value: 'INTERESTED' },
+  { label: '문의 중', value: 'CONTACTED' },
+  { label: '거래 약속', value: 'SCHEDULED' },
+  { label: '거래 완료', value: 'COMPLETED' },
+];
+
+const MOCK_TRADE_ITEMS: TradeHistoryItem[] = [
+  {
+    id: 'mock-trade-1',
+    analysisHref: '/trade/mock-analysis-1',
+    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
+    price: '1,850,000원',
+    status: 'INTERESTED',
+    badge: '구매고려',
+  },
+  {
+    id: 'mock-trade-2',
+    analysisHref: '/trade/mock-analysis-2',
+    title: 'BBS RS 18인치',
+    price: '600,000원',
+    status: 'INTERESTED',
+    badge: '보류',
+  },
+  {
+    id: 'mock-trade-3',
+    analysisHref: '/trade/mock-analysis-3',
+    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
+    price: '1,850,000원',
+    status: 'CONTACTED',
+  },
+  {
+    id: 'mock-trade-4',
+    analysisHref: '/trade/mock-analysis-4',
+    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
+    price: '1,850,000원',
+    status: 'SCHEDULED',
+  },
+  {
+    id: 'mock-trade-5',
+    analysisHref: '/trade/mock-analysis-5',
+    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
+    price: '1,850,000원',
+    status: 'COMPLETED',
+  },
+  {
+    id: 'mock-trade-6',
+    analysisHref: '/trade/mock-analysis-6',
+    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
+    price: '1,850,000원',
+    status: 'COMPLETED',
+  },
+  {
+    id: 'mock-trade-7',
+    analysisHref: '/trade/mock-analysis-7',
+    title: '맥북프로 14 M2 pro 16기가 512기가맥북프로 14 M2 pro 16기가 512기가',
+    price: '1,850,000원',
+    status: 'COMPLETED',
+  },
+];
+
+function getAnalysisHref(serverItemId: number): Href {
+  return `/trade/mock-analysis-${serverItemId}` as Href;
+}
+
+function getStatusLabel(status: TradeStatus): string {
+  switch (status) {
+    case 'INTERESTED':
+      return '문의 전';
+    case 'CONTACTED':
+      return '문의 중';
+    case 'SCHEDULED':
+      return '거래 약속';
+    case 'COMPLETED':
+      return '거래 완료';
+    case 'CANCELED':
+      return '취소';
+  }
+}
+
+function isActiveStatus(status: TradeStatus): boolean {
+  return status === 'CONTACTED' || status === 'SCHEDULED';
+}
+
+function mapTradeRecord(record: TradeRecordDraft): TradeHistoryItem {
+  return {
+    id: record.localId,
+    analysisHref: getAnalysisHref(record.serverItemId),
+    title: record.listingSnapshot.title,
+    price: `${record.listingSnapshot.price.toLocaleString('ko-KR')}원`,
+    status: record.status,
+    badge: record.memo || undefined,
+  };
+}
+
+function filterTradeItems(
+  items: TradeHistoryItem[],
+  query: string,
+  selectedFilter: TradeFilter,
+): TradeHistoryItem[] {
+  const trimmedQuery = query.trim().toLowerCase();
+
+  return items.filter((item) => {
+    const matchesFilter = selectedFilter === 'ALL' || item.status === selectedFilter;
+    const matchesQuery =
+      !trimmedQuery ||
+      `${item.title} ${item.price} ${getStatusLabel(item.status)} ${item.badge ?? ''}`
+        .toLowerCase()
+        .includes(trimmedQuery);
+
+    return matchesFilter && matchesQuery;
+  });
+}
 
 export default function TradeRecordsScreen() {
-  const [items, setItems] = useState<TradeRecordDraft[]>([]);
+  const [records, setRecords] = useState<TradeRecordDraft[]>([]);
+  const [query, setQuery] = useState('');
+  const [selectedFilter, setSelectedFilter] = useState<TradeFilter>('ALL');
+  const [isListScrolled, setIsListScrolled] = useState(false);
 
   const load = useCallback(() => {
-    getTradeRecords().then(setItems);
+    getTradeRecords().then(setRecords);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  const items = useMemo(() => {
+    const storedItems = records.map(mapTradeRecord);
+    return filterTradeItems([...storedItems, ...MOCK_TRADE_ITEMS], query, selectedFilter);
+  }, [query, records, selectedFilter]);
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <Header title="거래 내역" />
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.note}>디자인 적용 전 로컬 저장 확인용 화면입니다.</Text>
-        {items.length === 0 ? (
-          <Text style={styles.empty}>저장된 거래 기록이 없습니다.</Text>
-        ) : (
-          items.map((item) => (
-            <View key={item.localId} style={styles.card}>
-              <Text style={styles.title}>{item.listingSnapshot.title}</Text>
-              <Text style={styles.body}>serverItemId: {item.serverItemId}</Text>
-              <Text style={styles.body}>상태: {item.status}</Text>
-              <Text style={styles.body}>판단/메모: {item.memo ?? '-'}</Text>
-              <Text style={styles.body}>가격: {item.listingSnapshot.price.toLocaleString('ko-KR')}원</Text>
-              <Text style={styles.muted}>updatedAt: {item.updatedAt}</Text>
-            </View>
-          ))
-        )}
-      </ScrollView>
+    <SafeAreaView edges={['top']} style={styles.safeArea}>
+      <View style={styles.header}>
+        <Pressable
+          accessibilityLabel="뒤로 가기"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => router.back()}
+          style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
+          <View style={styles.arrowBox}>
+            <Image contentFit="contain" source={assets.arrow} style={styles.arrowIcon} />
+          </View>
+        </Pressable>
+        <Text style={styles.headerTitle}>거래 내역</Text>
+        <View style={styles.headerButton} />
+      </View>
+
+      <View style={styles.searchArea}>
+        <View style={styles.searchBox}>
+          <TextInput
+            accessibilityLabel="거래 내역 검색"
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setQuery}
+            placeholder="검색"
+            placeholderTextColor="#BEC5CA"
+            style={styles.searchInput}
+            value={query}
+          />
+          <View style={styles.searchIconBox}>
+            <Image contentFit="contain" source={assets.search} style={styles.searchIcon} />
+          </View>
+        </View>
+      </View>
+
+      <View style={[styles.filterArea, isListScrolled && styles.filterAreaScrolled]}>
+        <FlatList
+          contentContainerStyle={styles.filterContent}
+          data={FILTERS}
+          horizontal
+          keyExtractor={(item) => item.value}
+          renderItem={({ item }) => (
+            <FilterChip
+              active={selectedFilter === item.value}
+              label={item.label}
+              onPress={() => setSelectedFilter(item.value)}
+            />
+          )}
+          showsHorizontalScrollIndicator={false}
+        />
+      </View>
+
+      <FlatList
+        contentContainerStyle={styles.listContent}
+        data={items}
+        keyExtractor={(item) => item.id}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>
+            {query ? '검색 결과가 없습니다.' : '저장된 거래 내역이 없습니다.'}
+          </Text>
+        }
+        onScroll={(event) => {
+          const nextIsScrolled = event.nativeEvent.contentOffset.y > 0;
+          setIsListScrolled((current) =>
+            current === nextIsScrolled ? current : nextIsScrolled,
+          );
+        }}
+        scrollEventThrottle={16}
+        renderItem={({ item }) => <TradeHistoryRow item={item} />}
+        showsVerticalScrollIndicator={false}
+        style={styles.list}
+      />
     </SafeAreaView>
   );
 }
 
-function Header({ title }: { title: string }) {
+function FilterChip({
+  active,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+}) {
   return (
-    <View style={styles.header}>
-      <Pressable onPress={() => router.back()} style={styles.backButton}>
-        <Text style={styles.backText}>뒤로</Text>
-      </Pressable>
-      <Text style={styles.headerTitle}>{title}</Text>
-      <View style={styles.headerSpacer} />
-    </View>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.filterChip,
+        active ? styles.filterChipActive : styles.filterChipInactive,
+        pressed && styles.pressed,
+      ]}>
+      <Text style={[styles.filterText, active ? styles.filterTextActive : styles.filterTextInactive]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function TradeHistoryRow({ item }: { item: TradeHistoryItem }) {
+  const active = isActiveStatus(item.status);
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${item.title} 거래 상세 보기`}
+      onPress={() => router.push(item.analysisHref)}
+      style={({ pressed }) => [styles.itemContainer, pressed && styles.pressed]}>
+      <View style={styles.itemContent}>
+        <View style={styles.itemTextGroup}>
+          <Text numberOfLines={1} style={styles.itemTitle}>
+            {item.title}
+          </Text>
+          <View style={styles.priceRow}>
+            <Text numberOfLines={1} style={styles.priceText}>
+              {item.price}
+            </Text>
+            {item.badge ? (
+              <View style={styles.badge}>
+                <Text numberOfLines={1} style={styles.badgeText}>
+                  {item.badge}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+        <Text
+          numberOfLines={1}
+          style={[styles.statusText, active ? styles.statusTextActive : styles.statusTextMuted]}>
+          {getStatusLabel(item.status)}
+        </Text>
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { height: 56, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#EEEEEE' },
-  backButton: { width: 52, height: 40, justifyContent: 'center' },
-  backText: { color: '#555555', fontSize: 14 },
-  headerTitle: { flex: 1, color: '#111111', fontSize: 18, fontWeight: '700', textAlign: 'center' },
-  headerSpacer: { width: 52 },
-  content: { padding: 16, gap: 12 },
-  note: { color: '#777777', fontSize: 13, lineHeight: 19 },
-  empty: { color: '#999999', fontSize: 15, marginTop: 24 },
-  card: { padding: 14, borderWidth: 1, borderColor: '#DDDDDD', borderRadius: 8, gap: 6 },
-  title: { color: '#111111', fontSize: 16, fontWeight: '700' },
-  body: { color: '#333333', fontSize: 14, lineHeight: 20 },
-  muted: { color: '#777777', fontSize: 12, lineHeight: 18 },
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  header: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    height: 60,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    width: '100%',
+  },
+  headerButton: {
+    alignItems: 'flex-start',
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  arrowBox: {
+    alignItems: 'center',
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  arrowIcon: {
+    height: 16,
+    width: 16,
+  },
+  headerTitle: {
+    color: '#111727',
+    fontSize: 18,
+    fontWeight: '500',
+    letterSpacing: -0.3,
+    lineHeight: 24.3,
+    textAlign: 'center',
+  },
+  searchArea: {
+    height: 60,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    width: '100%',
+  },
+  searchBox: {
+    alignItems: 'center',
+    backgroundColor: '#F4F6FA',
+    borderRadius: 35,
+    flexDirection: 'row',
+    height: 46,
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+  },
+  searchInput: {
+    color: '#111727',
+    flex: 1,
+    fontSize: 15,
+    includeFontPadding: false,
+    letterSpacing: -0.3,
+    lineHeight: 20,
+    margin: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    textAlignVertical: 'center',
+  },
+  searchIconBox: {
+    alignItems: 'center',
+    height: 18,
+    justifyContent: 'center',
+    marginLeft: 12,
+    width: 18,
+  },
+  searchIcon: {
+    height: 15,
+    width: 15,
+  },
+  filterArea: {
+    height: 60,
+    justifyContent: 'center',
+    paddingVertical: 7,
+    width: '100%',
+  },
+  filterAreaScrolled: {
+    borderBottomColor: '#F6F5FA',
+    borderBottomWidth: 1,
+  },
+  filterContent: {
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+  },
+  filterChip: {
+    alignItems: 'center',
+    borderRadius: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  filterChipActive: {
+    backgroundColor: '#8656C2',
+    borderColor: '#8656C2',
+    borderWidth: 1,
+  },
+  filterChipInactive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#EDEDED',
+    borderWidth: 1,
+  },
+  filterText: {
+    fontSize: 14,
+    letterSpacing: -0.3,
+    lineHeight: 14,
+  },
+  filterTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  filterTextInactive: {
+    color: '#838C97',
+    fontWeight: '400',
+  },
+  list: {
+    flex: 1,
+    width: '100%',
+  },
+  listContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingBottom: 32,
+  },
+  itemContainer: {
+    borderBottomColor: '#F6F5FA',
+    borderBottomWidth: 1,
+    minHeight: 94,
+    width: '100%',
+  },
+  itemContent: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 20,
+    justifyContent: 'space-between',
+    minHeight: 94,
+    paddingVertical: 24,
+  },
+  itemTextGroup: {
+    flex: 1,
+    gap: 10,
+    minWidth: 0,
+  },
+  itemTitle: {
+    color: '#111727',
+    fontSize: 16,
+    fontWeight: '500',
+    includeFontPadding: false,
+    letterSpacing: -0.3,
+    lineHeight: 16,
+  },
+  priceRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minWidth: 0,
+  },
+  priceText: {
+    color: '#838C97',
+    flexShrink: 1,
+    fontSize: 14,
+    fontWeight: '400',
+    includeFontPadding: false,
+    letterSpacing: -0.3,
+    lineHeight: 14,
+  },
+  badge: {
+    alignItems: 'center',
+    backgroundColor: '#EFF3FF',
+    borderRadius: 28,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  badgeText: {
+    color: '#8656C2',
+    fontSize: 12,
+    fontWeight: '500',
+    includeFontPadding: false,
+    letterSpacing: -0.3,
+    lineHeight: 16.2,
+  },
+  statusText: {
+    fontSize: 15,
+    includeFontPadding: false,
+    letterSpacing: -0.2192,
+    lineHeight: 15,
+    textAlign: 'right',
+  },
+  statusTextActive: {
+    color: '#8656C2',
+    fontWeight: '700',
+  },
+  statusTextMuted: {
+    color: '#838C97',
+    fontWeight: '400',
+  },
+  emptyText: {
+    color: '#838C97',
+    fontSize: 14,
+    fontWeight: '400',
+    letterSpacing: -0.3,
+    lineHeight: 20,
+    paddingTop: 24,
+    textAlign: 'center',
+  },
+  pressed: {
+    opacity: 0.65,
+  },
 });

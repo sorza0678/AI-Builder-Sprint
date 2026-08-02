@@ -158,6 +158,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="거래내역"
                   icon={require('@/assets/images/sidebar/receipt.svg')}
                   iconSize={{ width: 19.333, height: 23.667 }}
+                  href="/trade-records"
                   onNavigate={navigate}
                 />
                 <MenuRow
