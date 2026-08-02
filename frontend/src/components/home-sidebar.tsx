@@ -98,8 +98,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="찜한상품"
-                  // TODO: 찜한상품 화면 경로가 확정되면 연결
-                  onPress={() => undefined}
+                  onPress={() => navigate('/saved-listings')}
                   style={({ pressed }) => [styles.quickLink, styles.quickLinkDivider, pressed && styles.pressed]}>
                   <Text style={styles.quickLinkText}>찜한상품</Text>
                 </Pressable>
