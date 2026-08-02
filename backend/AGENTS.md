@@ -110,6 +110,71 @@ mock 전용 상태라 문제가 드러나지 않지만, 실연동 순간 확인�
 
 테스트 `backend/tests/test_service_endpoints.py` (31개, `/listing` 10개·`/transaction` 10개 포함) 참고.
 
+### 2026-08-02 확장 (프론트 요구사항 문서 반영 — A·B 공동)
+
+**핵심 정책 변경 — 사용자 수정값의 전면 반영 (P0-1)**: `/listing`으로 저장한 수정값(제목·가격·하자)이
+이제 `/history`·`/bookmark`·`/comparison`·`/compare`·`/transaction`·`/mypage` 응답에 **우선 적용**된다.
+방식은 조회 시 LEFT JOIN (원본 `analysis_history`는 절대 덮어쓰지 않음 — AI 원본과 사용자 확정본 분리 보존).
+listing_details 행이 존재하면 defects 배열은 빈 배열이어도 사용자 확정값으로 존중한다.
+
+**신규 엔드포인트**:
+- `GET /api/v1/analysis/{item_id}?user_id=` — 분석 단건 상세 (P0-2). 로컬 캐시 없이 상세 화면 복원용.
+  **소유권 검증**: 남의 item_id는 존재 여부도 노출하지 않고 404 `ITEM_NOT_FOUND`. `listing_details` 포함(없으면 null).
+- `DELETE /api/v1/analysis/{item_id}?user_id=` — 분석 기록 삭제 (P1-7). **soft delete**(`deleted_at` 컬럼,
+  기존 DB는 init_db가 자동 마이그레이션) — 모든 조회가 `deleted_at IS NULL` 필터라 찜/비교/거래 목록에서도 함께 사라짐.
+- `POST /api/v1/price-proposal` `{user_id, item_id}` — 가격 제안 (A). `{target_price, negotiation_range{min,max},
+  reasons[], message}`. **시세 표본 부족(실측 실패·구버전 기록)이거나 이미 시세 이하면 target_price=null** (임의 숫자 금지).
+- `POST/GET /api/v1/comparison-history`, `GET/DELETE /api/v1/comparison-history/{id}` — 실행된 비교 기록 (P1-6).
+  비교 당시 제목·가격·점수를 **snapshot으로 보존** (이후 수정·삭제와 무관). `POST /compare`도 실행 시 자동 저장하고
+  응답에 `comparison_id`를 additive로 포함.
+
+**응답 형태 확장 (전부 additive — 기존 필드 유지)**:
+- `/analyze`: + `market_price{min,average,max,sample_count,calculated_at,confidence}` (시세 신뢰도 판단 근거,
+  실측 실패 시 min/max/confidence null) · `platform`·`thumbnail_url`·`location` (수집 못 하면 null — 지어내지 않음)
+- `/checklist`: + `groups[]` — `BEFORE_TRADE`/`ON_SITE`/`BEFORE_PAYMENT` 3그룹, 항목 `{id,text,reason,required}`.
+  카테고리(폰/노트북/패션…)별로 다른 항목 생성. 기존 `checklist[]`는 groups 평탄화본으로 유지.
+- `/inquiry-script`: + `questions[]` `{id,text,reason,category(CONDITION|COMPONENTS|AUTHENTICITY|TRADE)}` +
+  `combined_script`. 설명에 이미 있는 정보는 묻지 않고, **없는 정보만 질문으로 전환**. 기존 `script` 유지.
+- `/history` 아이템: + `platform`·`thumbnail_url`·`location` (null 가능)
+- `/bookmark` 아이템: + `source_url`·`bookmarked_at` · `/comparison` 아이템: + `source_url`·`comparison_added_at`
+
+생성 로직은 `app/advisor.py` (규칙 기반·결정론적, LLM 재호출 없음). 테스트 85개 (`test_advisor.py`·`test_p0_endpoints.py` 추가).
+
+**인증 (P0-3, 2026-08-02 추가)** — 하이브리드 방식 (`app/auth.py`, 표준 라이브러리만 사용):
+- `POST /api/v1/auth/signup` `{user_id, password, nickname?}` → `{token, expires_at}` (비밀번호 pbkdf2 해시 저장, 기존 id 재사용 전면 금지)
+- `POST /api/v1/auth/login` → 동일 응답. 실패는 계정 존재 여부를 숨기고 통일된 401 `LOGIN_FAILED`
+- **토큰 제시 시**: 요청의 user_id(query/body)가 토큰 신원과 다르면 403 `AUTH_MISMATCH`, 무효/만료 토큰은 401 `INVALID_TOKEN` — "클라이언트 user_id를 신뢰하지 않기"가 토큰 있는 순간부터 강제됨
+- **토큰 없음**: 기존처럼 동작 (프론트 미연동 상태 데모 유지). **`AUTH_REQUIRED=1`** 환경변수로 전면 필수화 (auth·/health 제외) — 실서비스 전환 스위치
+- `.env`: `AUTH_SECRET` 반드시 교체 (기본값은 개발용)
+
+**guest 데이터 이전 (P0-4)** — `POST /api/v1/account/migrate-guest` `{guest_user_id}` + **Bearer 토큰 필수**
+(계정은 토큰으로만 식별 — body로 계정 지정 불가). 단일 트랜잭션으로 6개 테이블 이전, 멱등(재호출 시 0건),
+실계정 이전 시도는 403(탈취 방지), 이전된 guest는 `users.migrated_to` 마킹으로 로그인·재가입·재이전 차단.
+
+### 보안 점검 결과 (2026-08-02, 어드버세리얼 리뷰로 재현·수정)
+
+수정 완료 (전부 실제 재현 후 픽스):
+1. **IDOR — 남의 매물 열람** (major): 찜/비교/compare/checklist/inquiry/price-proposal/transaction/listing이
+   item의 *존재*만 확인하고 소유자를 확인하지 않아, 로그인 사용자가 남의 `item_id`(순번 정수라 추측 가능)를
+   자기 찜에 넣으면 그 사람 분석 원문(제목·가격·source_url·사기경고)이 그대로 노출됐다.
+   → `db.user_owns_analysis()` / `get_owned_analysis()` 게이트를 모든 참조 지점에 적용 + `_collection_items`
+   JOIN에 `a.user_id = c.user_id` 이중 방어. **남의 것은 404(존재 여부도 비노출)로 통일.**
+   ⚠️ 부수효과: 남의 매물 `GET /listing`이 `LISTING_NOT_FOUND` → `ITEM_NOT_FOUND`로 바뀜 (의도된 변경).
+2. **AUTH_SECRET 빈 값 함정** (major): `.env.example`을 그대로 복사하면 `AUTH_SECRET=`(빈 문자열)이 되어
+   `os.getenv(k, default)`가 기본값으로 폴백하지 않아 **서명키가 빈 문자열** → 누구나 토큰 위조·계정 탈취.
+   → `os.getenv(...) or 폴백`으로 변경 + `AUTH_REQUIRED=1`인데 시크릿이 비면 **기동 거부**.
+3. **SSRF** (major, 배포 시 치명): `/analyze`가 사용자가 준 URL을 서버가 대신 요청하는데 내부망 차단이
+   없어, `http://127.0.0.1:.../` 나 `http://169.254.169.254/`(클라우드 메타데이터=서버 자격증명)를
+   긁어 응답에 담아줬다 (실측 재현). → `scraper.is_public_url()`로 스킴 검사 + DNS 조회 후
+   사설/루프백/링크로컬 IP 거부, **리다이렉트 매 홉 재검사**(외부→내부 우회 차단).
+4. **migrate_guest UNIQUE 충돌 → 불투명한 500** (minor): 이제 409 `MIGRATE_CONFLICT`로 변환.
+
+**알려진 잔여 리스크 (MVP 범위 밖 — 본선/실서비스 전 검토)**:
+- 로그인 시도 횟수 제한(브루트포스) 없음 — pbkdf2 20만회가 시도당 ~0.1초 비용을 강제해 완화되지만 제한은 아님
+- 토큰 취소(로그아웃/무효화) 없음 — stateless 서명 토큰이라 발급 후 7일간 유효
+- DNS 리바인딩(검사 시점과 실제 접속 시점의 IP가 바뀌는 공격)은 방어 안 함
+- CORS `allow_origins=["*"]` — 토큰이 헤더 방식이라 브라우저가 자동 첨부하진 않으나 배포 시 도메인 제한 권장
+
 ## 공통 규칙
 
 ### API 응답 형식

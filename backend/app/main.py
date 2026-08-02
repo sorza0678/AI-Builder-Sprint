@@ -14,15 +14,30 @@ from dotenv import load_dotenv
 
 load_dotenv()  # ai_report 등이 읽는 UPSTAGE_API_KEY 를 backend/.env 에서 로드
 
-from fastapi import FastAPI, Query, Request
+import os
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import ai_report, db, market_price, mock_data, rule_engine, scraper
+from app import (
+    advisor,
+    ai_report,
+    auth,
+    db,
+    market_price,
+    mock_data,
+    rule_engine,
+    scraper,
+)
 from app.schemas import (
+    AnalysisDeleteSuccess,
+    AnalysisDetailSuccess,
     AnalyzeRequest,
     AnalyzeSuccess,
+    AuthSuccess,
     BookmarkListSuccess,
     BookmarkRemoveSuccess,
     BookmarkRequest,
@@ -33,6 +48,10 @@ from app.schemas import (
     CompareSuccess,
     ComparisonAddRequest,
     ComparisonAddSuccess,
+    ComparisonHistoryDeleteSuccess,
+    ComparisonHistoryListSuccess,
+    ComparisonHistoryRequest,
+    ComparisonHistorySuccess,
     ComparisonListSuccess,
     ComparisonRemoveSuccess,
     ErrorBody,
@@ -42,7 +61,13 @@ from app.schemas import (
     InquiryScriptSuccess,
     ListingRequest,
     ListingSuccess,
+    LoginRequest,
+    MigrateGuestRequest,
+    MigrateGuestSuccess,
     MyPageSuccess,
+    PriceProposalRequest,
+    PriceProposalSuccess,
+    SignupRequest,
     TransactionDecisionEnum,
     TransactionListSuccess,
     TransactionRequest,
@@ -50,9 +75,54 @@ from app.schemas import (
     TransactionSuccess,
 )
 
+
+# ---------- 인증 (P0-3): 하이브리드 신원 강제 ----------
+# - Bearer 토큰 제시 시: 토큰의 user_id 만 신뢰. 요청(query/body)의 user_id 가 다르면 403.
+# - 토큰 없음: 기존처럼 요청의 user_id 사용 (프론트가 아직 토큰 미연동 — 데모 유지).
+# - AUTH_REQUIRED=1 환경변수: /api/v1/* (auth 제외) 전체에 토큰 필수 (실서비스 모드).
+async def enforce_auth(request: Request):
+    header = request.headers.get("authorization")
+    if header:
+        if not header.lower().startswith("bearer "):
+            raise HTTPException(401, {"code": "INVALID_TOKEN", "message": "Authorization 헤더는 'Bearer <token>' 형식이어야 합니다."})
+        token_uid = auth.verify_token(header[7:].strip())
+        if not token_uid:
+            raise HTTPException(401, {"code": "INVALID_TOKEN", "message": "토큰이 유효하지 않거나 만료되었습니다. 다시 로그인해주세요."})
+        request.state.auth_user_id = token_uid
+        # 요청이 주장하는 user_id 와 토큰 신원 대조 — 다르면 남의 데이터 접근 시도
+        claimed = request.query_params.get("user_id")
+        if claimed is None and request.method in ("POST", "PUT", "PATCH") and \
+                request.headers.get("content-type", "").startswith("application/json"):
+            try:
+                body = await request.json()  # Starlette이 body를 캐시하므로 엔드포인트 파싱과 충돌 없음
+                claimed = body.get("user_id") if isinstance(body, dict) else None
+            except Exception:
+                claimed = None
+        if claimed and claimed != token_uid:
+            raise HTTPException(403, {"code": "AUTH_MISMATCH", "message": "요청의 user_id가 로그인한 사용자와 다릅니다."})
+    else:
+        request.state.auth_user_id = None
+        path = request.url.path
+        if (
+            os.getenv("AUTH_REQUIRED")
+            and path.startswith("/api/v1/")
+            and not path.startswith("/api/v1/auth/")
+        ):
+            raise HTTPException(401, {"code": "AUTH_REQUIRED", "message": "로그인이 필요합니다."})
+
+
+def require_login(request: Request) -> str:
+    """토큰이 필수인 엔드포인트용 — 인증된 user_id 반환, 없으면 401."""
+    uid = getattr(request.state, "auth_user_id", None)
+    if not uid:
+        raise HTTPException(401, {"code": "AUTH_REQUIRED", "message": "이 API는 로그인(Bearer 토큰)이 필요합니다."})
+    return uid
+
+
 app = FastAPI(
     title="이가격 맞아요? API",
     version="0.2.0",
+    dependencies=[Depends(enforce_auth)],
     description="중고 매물 URL 입력 → 시세비교 + AI 사기 위험분석 + 신뢰도 점수. "
     "실제 분석 파이프라인 동작 (모든 외부호출 fallback — 데모 안죽음). "
     "테스트 트리거: url에 fail/danger/warning/mock-safe 포함 시 고정 응답.",
@@ -86,12 +156,27 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
+    # 실서비스 모드(AUTH_REQUIRED=1)인데 서명키가 없으면 기동 거부 —
+    # 개발용 폴백 키로 운영하면 누구나 남의 토큰을 위조할 수 있다 (설정 실수를 조용히 넘기지 않는다).
+    if os.getenv("AUTH_REQUIRED") and not auth.secret_is_configured():
+        raise RuntimeError(
+            "AUTH_REQUIRED=1 인데 AUTH_SECRET 이 비어 있습니다. "
+            ".env 에 무작위 문자열을 넣어주세요 (예: python3 -c \"import secrets;print(secrets.token_hex(32))\")."
+        )
     db.init_db()
 
 
 def error(status_code: int, code: str, message: str) -> JSONResponse:
     body = ErrorResponse(error=ErrorBody(code=code, message=message))
     return JSONResponse(status_code=status_code, content=body.model_dump())
+
+
+# 팀 컨벤션: 모든 응답은 {ok, data, error} 형식 — HTTPException(401/403/404/405 등)도 변환
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if isinstance(exc.detail, dict) and "code" in exc.detail:
+        return error(exc.status_code, exc.detail["code"], exc.detail.get("message", ""))
+    return error(exc.status_code, "HTTP_ERROR", str(exc.detail))
 
 
 # 팀 컨벤션: 모든 응답은 {ok, data, error} 형식 — FastAPI 기본 422/500 응답도 변환한다
@@ -110,6 +195,84 @@ async def internal_error_handler(request: Request, exc: Exception):
 
 def success(data) -> dict:
     return {"ok": True, "data": data, "error": None}
+
+
+def _run_comparison(user_id: str, item_ids: list[int]) -> tuple[list[dict], str, int] | None:
+    """비교 실행 공통 로직 (compare·comparison-history 공유).
+
+    소유한 매물만 조회 → 하나라도 없으면(=남의 것/삭제됨) None(호출부에서 404).
+    성공 시 (items, recommendation, comparison_id) 반환하며 비교 기록도 저장한다.
+    """
+    items = db.get_multiple_analyses(item_ids, user_id=user_id)
+    if {i["item_id"] for i in items} != set(item_ids):
+        return None
+    best = max(items, key=lambda x: x["trust_score"])
+    recommendation = f"'{best['title']}' 매물이 신뢰도 {best['trust_score']}점으로 가장 안전합니다."
+    snapshot = [
+        {k: item[k] for k in ("item_id", "title", "price", "trust_score", "risk_level")}
+        for item in items
+    ]
+    comparison_id = db.save_comparison_history(user_id, item_ids, recommendation, snapshot)
+    return items, recommendation, comparison_id
+
+
+# ---------- 인증 API (Backend B, P0-3·P0-4) ----------
+
+@app.post(
+    "/api/v1/auth/signup",
+    response_model=AuthSuccess,
+    responses={409: {"model": ErrorResponse}},
+    tags=["auth"],
+    summary="회원가입 — 비밀번호는 pbkdf2 해시로 저장",
+)
+def signup(req: SignupRequest):
+    created = db.create_account(req.user_id, auth.hash_password(req.password), req.nickname)
+    if not created:
+        # guest 행 포함 어떤 기존 id도 재사용 금지 — 남의 guest 데이터 탈취 방지
+        return error(409, "USER_EXISTS", f"이미 사용 중인 user_id: {req.user_id}")
+    token, expires_at = auth.create_token(req.user_id)
+    return success({"user_id": req.user_id, "nickname": req.nickname, "token": token, "expires_at": expires_at})
+
+
+@app.post(
+    "/api/v1/auth/login",
+    response_model=AuthSuccess,
+    responses={401: {"model": ErrorResponse}},
+    tags=["auth"],
+    summary="로그인 — Bearer 토큰 발급 (7일 유효)",
+)
+def login(req: LoginRequest):
+    user = db.get_user_auth(req.user_id)
+    # 존재하지 않는 계정과 비밀번호 오류를 같은 메시지로 — 계정 존재 여부 노출 방지
+    if (
+        not user
+        or not user["password_hash"]
+        or user["migrated_to"]  # 이전 완료된 guest id 로그인 금지
+        or not auth.verify_password(req.password, user["password_hash"])
+    ):
+        return error(401, "LOGIN_FAILED", "아이디 또는 비밀번호가 올바르지 않습니다.")
+    token, expires_at = auth.create_token(req.user_id)
+    return success({"user_id": req.user_id, "nickname": user["nickname"], "token": token, "expires_at": expires_at})
+
+
+@app.post(
+    "/api/v1/account/migrate-guest",
+    response_model=MigrateGuestSuccess,
+    responses={401: {"model": ErrorResponse}, 403: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    tags=["auth"],
+    summary="비회원(guest) 기록을 로그인 계정으로 이전 (토큰 필수, 멱등)",
+)
+def migrate_guest(req: MigrateGuestRequest, account_id: str = Depends(require_login)):
+    try:
+        counts = db.migrate_guest(account_id, req.guest_user_id)
+    except db.MigrateError as e:
+        status = 403 if e.code == "CANNOT_MIGRATE_ACCOUNT" else 409
+        return error(status, e.code, e.message)
+    return success({
+        "account_user_id": account_id,
+        "guest_user_id": req.guest_user_id,
+        "migrated": counts,
+    })
 
 
 @app.post(
@@ -137,15 +300,25 @@ def analyze(req: AnalyzeRequest):
     if not listing["scrape_ok"]:
         return error(400, "SCRAPE_FAILED", "매물 페이지를 불러오지 못했습니다. URL을 확인해주세요.")
 
-    avg, measured = market_price.get_market_price(listing["title"], listing["price"])
-    verdict = rule_engine.evaluate(listing, avg, measured)
+    market = market_price.get_market_detail(listing["title"], listing["price"])
+    verdict = rule_engine.evaluate(listing, market["average"], market["measured"])
     verdict = ai_report.merge_report(verdict, ai_report.get_ai_report(listing))
 
     data = {
         "item_id": 0,  # save_analysis 가 DB PK 로 교체
         "title": listing["title"],
         "price": listing["price"] or 0,
-        "market_price_avg": avg,
+        "market_price_avg": market["average"],
+        # 시세 상세(min/max/표본수/실측여부) — 프론트가 "평균가의 신뢰도"를 판단할 근거
+        "market_price": market,
+        # 목록 화면용 매물 기본 정보 — 수집 못 했으면 null (지어내지 않는다)
+        "platform": listing.get("platform"),
+        "thumbnail_url": listing.get("image"),
+        "location": listing.get("location"),
+        # 설명 원문(요약) — 질문 생성·가격 제안이 쓰는 내부 데이터.
+        # description/measured 는 응답 스키마(AnalyzeData)에 없어서 API 응답에서는
+        # response_model 이 자동으로 걸러낸다 (DB raw JSON에만 남음).
+        "description": (listing.get("description") or "")[:600],
         **verdict,
     }
     analysis_id = db.save_analysis(req.user_id, req.url, data)
@@ -160,17 +333,13 @@ def analyze(req: AnalyzeRequest):
     summary="저장된 매물 2~3개 비교",
 )
 def compare(req: CompareRequest):
-    items = db.get_multiple_analyses(req.item_ids)
-    found_ids = {i["item_id"] for i in items}
-    missing = [i for i in req.item_ids if i not in found_ids]
-    if missing:
-        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {missing}")
-    best = max(items, key=lambda x: x["trust_score"])
+    # 소유한 매물만 비교 (남의 item_id 섞으면 404) + 화면2 수정값 반영 + 비교 기록 저장
+    result = _run_comparison(req.user_id, req.item_ids)
+    if result is None:
+        return error(404, "ITEM_NOT_FOUND", "본인 분석 내역에 없는 item_id가 포함되어 있습니다.")
+    items, recommendation, comparison_id = result
     return success(
-        {
-            "items": items,
-            "recommendation": f"'{best['title']}' 매물이 신뢰도 {best['trust_score']}점으로 가장 안전합니다.",
-        }
+        {"items": items, "recommendation": recommendation, "comparison_id": comparison_id}
     )
 
 
@@ -182,10 +351,18 @@ def compare(req: CompareRequest):
     summary="현장 확인 체크리스트 생성",
 )
 def checklist(req: ChecklistRequest):
-    analysis = db.get_analysis_by_id(req.item_id)
+    analysis = db.get_owned_analysis(req.user_id, req.item_id)  # 소유권 검증 포함
     if not analysis:
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
-    return success({"item_id": req.item_id, "checklist": mock_data.build_checklist(analysis)})
+    listing = db.get_listing_details(req.user_id, req.item_id)  # 사용자 수정값 (없으면 None)
+    groups = advisor.build_checklist_groups(analysis, listing)
+    return success(
+        {
+            "item_id": req.item_id,
+            "checklist": advisor.flatten_checklist(groups),  # 구버전 호환
+            "groups": groups,
+        }
+    )
 
 
 @app.post(
@@ -196,10 +373,19 @@ def checklist(req: ChecklistRequest):
     summary="판매자 문의 메시지 생성",
 )
 def inquiry_script(req: InquiryScriptRequest):
-    analysis = db.get_analysis_by_id(req.item_id)
+    analysis = db.get_owned_analysis(req.user_id, req.item_id)  # 소유권 검증 포함
     if not analysis:
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
-    return success({"item_id": req.item_id, "script": mock_data.build_inquiry_script(analysis)})
+    listing = db.get_listing_details(req.user_id, req.item_id)  # 사용자 수정값 (없으면 None)
+    inquiry = advisor.build_inquiry(analysis, listing)
+    return success(
+        {
+            "item_id": req.item_id,
+            "script": inquiry["combined_script"],  # 구버전 호환
+            "questions": inquiry["questions"],
+            "combined_script": inquiry["combined_script"],
+        }
+    )
 
 
 @app.get(
@@ -225,7 +411,7 @@ def history(
     summary="거래 상태 등록/변경 (화면5 구매 결정 저장)",
 )
 def set_transaction(req: TransactionRequest):
-    if not db.get_analysis_by_id(req.item_id):
+    if not db.user_owns_analysis(req.user_id, req.item_id):  # 소유권 검증 (남의 매물 참조 차단)
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
     updated_at = db.upsert_transaction_status(req.user_id, req.item_id, req.stage, req.decision)
     return success(
@@ -256,7 +442,7 @@ def list_transactions(
     summary="비교 후보 추가",
 )
 def add_comparison(req: ComparisonAddRequest):
-    if not db.get_analysis_by_id(req.item_id):
+    if not db.user_owns_analysis(req.user_id, req.item_id):  # 소유권 검증 (남의 매물 참조 차단)
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
     added = db.add_comparison_item(req.user_id, req.item_id)
     return success({"item_id": req.item_id, "added": added})
@@ -295,7 +481,7 @@ def list_comparison(user_id: str = Query(examples=["demo-user-1"])):
     summary="찜 추가",
 )
 def add_bookmark(req: BookmarkRequest):
-    if not db.get_analysis_by_id(req.item_id):
+    if not db.user_owns_analysis(req.user_id, req.item_id):  # 소유권 검증 (남의 매물 참조 차단)
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
     bookmarked = db.bookmark(req.user_id, req.item_id)
     return success({"item_id": req.item_id, "bookmarked": bookmarked})
@@ -334,7 +520,7 @@ def list_bookmarks(user_id: str = Query(examples=["demo-user-1"])):
     summary="화면2 확인된 매물 상세 저장 (upsert)",
 )
 def upsert_listing(req: ListingRequest):
-    if not db.get_analysis_by_id(req.item_id):
+    if not db.user_owns_analysis(req.user_id, req.item_id):  # 소유권 검증 (남의 매물 참조 차단)
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
     updated_at = db.upsert_listing_details(
         req.user_id,
@@ -363,7 +549,7 @@ def get_listing(
     user_id: str = Query(examples=["demo-user-1"]),
     item_id: int = Query(examples=[1]),
 ):
-    if not db.get_analysis_by_id(item_id):
+    if not db.user_owns_analysis(user_id, item_id):  # 소유권 검증
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
     detail = db.get_listing_details(user_id, item_id)
     if not detail:
@@ -382,6 +568,117 @@ def mypage(
     recent_limit: int = Query(5, ge=1, le=20),
 ):
     return success(db.get_mypage_summary(user_id, recent_limit))
+
+
+@app.post(
+    "/api/v1/price-proposal",
+    response_model=PriceProposalSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["follow-up"],
+    summary="가격 제안 (시세·하자 근거 기반 — 근거 부족 시 target_price null)",
+)
+def price_proposal(req: PriceProposalRequest):
+    analysis = db.get_owned_analysis(req.user_id, req.item_id)  # 소유권 검증 포함
+    if not analysis:
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {req.item_id}")
+    listing = db.get_listing_details(req.user_id, req.item_id)
+    proposal = advisor.build_price_proposal(analysis, listing)
+    return success({"item_id": req.item_id, **proposal})
+
+
+@app.get(
+    "/api/v1/analysis/{item_id}",
+    response_model=AnalysisDetailSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["analyze"],
+    summary="분석 단건 상세 조회 (소유권 검증 — 본인 것만)",
+)
+def analysis_detail(
+    item_id: int,
+    user_id: str = Query(examples=["demo-user-1"]),
+):
+    detail = db.get_analysis_full(user_id, item_id)
+    if not detail:
+        # 남의 분석이든 없는 분석이든 같은 404 — 존재 여부를 노출하지 않는다
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
+    return success(detail)
+
+
+@app.delete(
+    "/api/v1/analysis/{item_id}",
+    response_model=AnalysisDeleteSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["analyze"],
+    summary="분석 기록 삭제 (soft delete — 찜/비교/거래 목록에서도 함께 사라짐)",
+)
+def analysis_delete(
+    item_id: int,
+    user_id: str = Query(examples=["demo-user-1"]),
+):
+    deleted = db.delete_analysis(user_id, item_id)
+    if not deleted:
+        return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
+    return success({"item_id": item_id, "deleted": True})
+
+
+@app.post(
+    "/api/v1/comparison-history",
+    response_model=ComparisonHistorySuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["comparison"],
+    summary="비교 실행 + 기록 저장 (POST /compare 와 동일 로직, 기록 중심 응답)",
+)
+def create_comparison_history(req: ComparisonHistoryRequest):
+    result = _run_comparison(req.user_id, req.item_ids)
+    if result is None:
+        return error(404, "ITEM_NOT_FOUND", "본인 분석 내역에 없는 item_id가 포함되어 있습니다.")
+    _, _, comparison_id = result
+    return success(db.get_comparison_history(req.user_id, comparison_id))
+
+
+@app.get(
+    "/api/v1/comparison-history",
+    response_model=ComparisonHistoryListSuccess,
+    tags=["comparison"],
+    summary="비교 기록 목록 (최신순)",
+)
+def list_comparison_history(user_id: str = Query(examples=["demo-user-1"])):
+    items = db.get_comparison_history_list(user_id)
+    return success({"items": items, "total": len(items)})
+
+
+@app.get(
+    "/api/v1/comparison-history/{comparison_id}",
+    response_model=ComparisonHistorySuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["comparison"],
+    summary="비교 기록 단건 조회 (본인 것만)",
+)
+def get_comparison_history(
+    comparison_id: int,
+    user_id: str = Query(examples=["demo-user-1"]),
+):
+    record = db.get_comparison_history(user_id, comparison_id)
+    if not record:
+        return error(404, "COMPARISON_NOT_FOUND", f"비교 기록에 없는 comparison_id: {comparison_id}")
+    return success(record)
+
+
+@app.delete(
+    "/api/v1/comparison-history/{comparison_id}",
+    response_model=ComparisonHistoryDeleteSuccess,
+    responses={404: {"model": ErrorResponse}},
+    tags=["comparison"],
+    summary="비교 기록 삭제 (본인 것만)",
+)
+def delete_comparison_history(
+    comparison_id: int,
+    user_id: str = Query(examples=["demo-user-1"]),
+):
+    deleted = db.delete_comparison_history(user_id, comparison_id)
+    if not deleted:
+        return error(404, "COMPARISON_NOT_FOUND", f"비교 기록에 없는 comparison_id: {comparison_id}")
+    return success({"comparison_id": comparison_id, "deleted": True})
 
 
 @app.get("/health", tags=["meta"], summary="상태 확인")

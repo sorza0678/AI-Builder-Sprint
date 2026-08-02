@@ -111,3 +111,38 @@ def test_find_ld_product_ignores_non_product_blocks_and_malformed_json():
     """
     product = scraper._find_ld_product(html)
     assert product == {"@type": "Product", "name": "실제 상품"}
+
+
+# ---------- SSRF 방어 (보안 점검에서 실제 재현된 취약점) ----------
+
+def test_is_public_url_blocks_internal_targets():
+    from app import scraper as s
+
+    blocked = [
+        "http://127.0.0.1:8000/admin",       # 루프백 — 같은 서버의 내부 API
+        "http://localhost:9911/",
+        "http://169.254.169.254/latest/meta-data/",  # 클라우드 메타데이터 = 서버 자격증명
+        "http://10.0.0.5/internal",          # 사설망
+        "http://192.168.0.1/router",
+        "http://[::1]:8000/",
+        "file:///etc/passwd",                # http(s) 아닌 스킴
+        "gopher://evil/",
+        "http://0.0.0.0/",
+    ]
+    for url in blocked:
+        assert s.is_public_url(url) is False, f"차단돼야 함: {url}"
+
+
+def test_is_public_url_allows_real_sites():
+    from app import scraper as s
+
+    assert s.is_public_url("https://m.bunjang.co.kr/products/123") is True
+    assert s.is_public_url("https://www.daangn.com/articles/1") is True
+
+
+def test_scrape_listing_returns_fallback_for_internal_url():
+    """내부망 URL 은 예외 없이 fallback(scrape_ok=False) → /analyze 가 400 SCRAPE_FAILED."""
+    from app import scraper as s
+
+    result = s.scrape_listing("http://127.0.0.1:8000/admin")
+    assert result["scrape_ok"] is False

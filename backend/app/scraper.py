@@ -3,9 +3,11 @@
 원칙: 스크래핑은 언제든 막힐 수 있다. 어떤 실패에도 예외를 밖으로 던지지 않고
 FALLBACK_LISTING 을 반환한다 (데모 안죽게). fallback 여부는 scrape_ok 로 표시.
 """
+import ipaddress
 import json
 import re
-from urllib.parse import urlparse
+import socket
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -36,6 +38,7 @@ FALLBACK_LISTING = {
     "price": 850_000,
     "description": "생활기스 약간 있고 배터리 효율 88%입니다. 박스 없음, 직거래 선호합니다.",
     "image": None,
+    "location": None,
     "seller_trade_count": None,
     "seller_account_age_days": None,
     "scrape_ok": False,
@@ -51,6 +54,40 @@ def detect_platform(url: str) -> str:
         if host == domain or host.endswith("." + domain):
             return name
     return "unknown"
+
+
+MAX_REDIRECTS = 3
+
+
+def is_public_url(url: str) -> bool:
+    """SSRF 방어: 외부 공개 주소만 허용.
+
+    사용자가 준 URL 로 서버가 대신 요청하므로, 막지 않으면 공격자가
+    http://127.0.0.1:8000/... (내부 서비스) 나 http://169.254.169.254/... (클라우드
+    메타데이터 = 서버 자격증명) 같은 내부망 주소를 긁어오게 시킬 수 있다.
+    호스트명을 실제로 DNS 조회해서, 하나라도 사설/루프백/링크로컬로 풀리면 거부한다.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False  # file://, gopher:// 등 차단
+    host = parsed.hostname
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if not ip.is_global or ip.is_multicast:
+            return False
+    return True
 
 
 def _meta(html: str, prop: str) -> str | None:
@@ -129,12 +166,31 @@ def _first_image(image: object) -> str | None:
     return None
 
 
+def _get_public(url: str) -> httpx.Response:
+    """공개 주소만 GET. 리다이렉트도 매 홉 검사한다 (외부→내부 우회 차단)."""
+    for _ in range(MAX_REDIRECTS + 1):
+        if not is_public_url(url):
+            raise ValueError(f"내부망/비공개 주소로는 요청하지 않습니다: {url}")
+        r = httpx.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT, follow_redirects=False)
+        if r.status_code in (301, 302, 303, 307, 308):
+            location = getattr(r, "headers", {}).get("location")
+            if not location:
+                r.raise_for_status()
+                return r
+            url = urljoin(url, location)  # 상대경로 Location 도 절대 URL 로
+            continue
+        r.raise_for_status()
+        return r
+    raise ValueError("리다이렉트가 너무 많습니다")
+
+
 def _scrape_bunjang_api(url: str) -> dict | None:
     """번개장터는 상품 API가 열려있어 og태그보다 정확하다. 실패하면 None."""
     m = re.search(r"/products/(\d+)", url)
     if not m:
         return None
     pid = m.group(1)
+    # 고정 도메인(번개장터 공식 API)이라 SSRF 위험 없음 — pid 는 정규식으로 숫자만 통과
     r = httpx.get(
         f"https://api.bunjang.co.kr/api/pms/v3/products-detail/{pid}?viewerUid=-1",
         headers={"User-Agent": UA},
@@ -144,12 +200,16 @@ def _scrape_bunjang_api(url: str) -> dict | None:
     d = r.json().get("data", {}).get("product", {})
     if not d.get("name"):
         return None
+    # 판매 지역: API 응답에 있을 때만 — 없으면 null (지어내지 않는다)
+    geo = d.get("geo") or {}
+    location = d.get("location") or geo.get("label") or geo.get("address") or None
     return {
         "platform": "bunjang",
         "title": d["name"],
         "price": int(d.get("price") or 0) or None,
         "description": (d.get("description") or "")[:2000],
         "image": d.get("imageUrl"),
+        "location": location if isinstance(location, str) else None,
         "seller_trade_count": None,
         "seller_account_age_days": None,
         "scrape_ok": True,
@@ -178,10 +238,7 @@ def scrape_listing(url: str) -> dict:
             pass  # og 태그 방식으로 재시도
 
     try:
-        r = httpx.get(
-            url, headers={"User-Agent": UA}, timeout=TIMEOUT, follow_redirects=True
-        )
-        r.raise_for_status()
+        r = _get_public(url)
         html = r.text
         product = _find_ld_product(html)
 
@@ -210,6 +267,7 @@ def scrape_listing(url: str) -> dict:
             "price": price,
             "description": description[:2000],
             "image": image,
+            "location": None,  # og태그/JSON-LD 경로에서는 판매 지역을 얻을 수 없다
             "seller_trade_count": None,
             "seller_account_age_days": None,
             "scrape_ok": True,

@@ -53,42 +53,4 @@ ANALYSES: dict[int, dict] = {
     },
 }
 
-# STEP 2부터 item_id 는 DB auto-increment 값이라 고정 키로 못 둔다.
-# 저장된 분석 데이터(raw_analysis_json)를 바탕으로 그때그때 조합해서 만든다.
-# (LLM 호출 없음 — STEP 7 원칙 준수. 진짜 로직은 나중 단계에서 고도화)
-
-_RISK_HEADLINE = {
-    "SAFE": [],
-    "WARNING": ["⚠️ 주의 매물 — 아래 항목을 꼭 직접 확인하세요"],
-    "DANGER": ["🚨 고위험 매물 — 직거래 외 거래 금지, 선입금 요구 시 즉시 중단"],
-}
-
-
-def build_checklist(analysis: dict) -> list[str]:
-    items = list(_RISK_HEADLINE.get(analysis["risk_level"], []))
-    for defect in analysis["product_status"]["defects_found"]:
-        items.append(f"실물 확인: {defect}")
-    for missing in analysis["product_status"]["missing_components"]:
-        items.append(f"미포함 항목 확인: {missing}")
-    for warning in analysis["scam_warnings"]:
-        items.append(f"판매자에게 확인: {warning}")
-    if not items:
-        items.append("특이사항 없음 — 일반 중고거래 주의사항만 확인하세요.")
-    items.append("직거래 시 안전한 공공장소(지구대 인근 등)에서 만나세요.")
-    return items
-
-
-def build_inquiry_script(analysis: dict) -> str:
-    lines = [f"안녕하세요, '{analysis['title']}' 매물 보고 연락드립니다."]
-    n = 1
-    for defect in analysis["product_status"]["defects_found"]:
-        lines.append(f"{n}. {defect} — 실물 사진 조금 더 받아볼 수 있을까요?")
-        n += 1
-    for missing in analysis["product_status"]["missing_components"]:
-        lines.append(f"{n}. {missing} 관련해서 가격 조정 여지가 있을까요?")
-        n += 1
-    if analysis["risk_level"] == "DANGER":
-        lines.append(f"{n}. 직거래로만 진행하고 싶은데 가능한 지역이 어디신가요?")
-        n += 1
-    lines.append(f"{n}. 직거래 가능한 지역/시간대가 어떻게 되시나요?")
-    return "\n".join(lines)
+# (체크리스트/문의질문 생성은 app/advisor.py 로 이동 — 구조화 버전으로 대체됨, 2026-08-02)
