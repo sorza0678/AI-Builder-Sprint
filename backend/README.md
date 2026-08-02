@@ -1,6 +1,45 @@
-# Backend A — AI 분석 API (이가격 맞아요?)
+# Backend — AI 분석 + 서비스 API (이가격 맞아요?)
 
-중고 매물 URL 입력 → 시세비교 + AI 사기 위험분석 + 신뢰도 점수.
+중고 매물 URL 입력 → 시세비교 + AI 사기 위험분석 + 신뢰도 점수, 찜·비교·거래·마이페이지까지.
+Backend A(AI 분석 파이프라인)와 Backend B(서비스·DB)가 같은 FastAPI 앱(`backend/app/`) 안에서 작업한다 —
+파일/엔드포인트 단위로 담당이 나뉘어 있을 뿐 별도 서비스로 배포되진 않는다. 담당 구분과 상세 규칙은
+`backend/AGENTS.md` 참고, 여기는 실행 방법과 API 계약이 원본.
+
+## 실행
+
+```bash
+cd backend
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+- Swagger 문서: http://localhost:8000/docs
+- 상태 확인: `GET /health` (→ `upstage_key`로 Solar 연동 여부 확인)
+- DB: 기본은 SQLite(`backend/resale_guard.db`, 자동 생성) — `.env`에 `DATABASE_URL`을 채우면 Postgres(Supabase)로
+  자동 전환됨(코드 무변경). 자세한 건 아래 "SQLite ↔ Postgres 이중 백엔드" 참고, `.env.example` 참고
+- Upstage 연동(선택): `cp .env.example .env` 후 `UPSTAGE_API_KEY` 입력 — 없어도 Rule Engine만으로 전부 동작
+- 테스트: `.venv/bin/python -m pytest tests/ -q` (58개, A/B 전부 포함)
+
+## 공통 응답 형식 (팀 컨벤션)
+
+```json
+성공: { "ok": true,  "data": { ... },  "error": null }
+실패: { "ok": false, "data": null,     "error": { "code": "...", "message": "..." } }
+```
+
+**모든 실패가 이 형식을 따른다** — 요청 검증 실패(422 `VALIDATION_ERROR`)와 서버 오류(500 `INTERNAL_ERROR`)도 전역 핸들러로 변환해둠. 프론트는 `error.code` / `error.message`만 믿고 처리하면 된다.
+
+| code | HTTP | 언제 |
+|---|---|---|
+| `SCRAPE_FAILED` | 400 | 매물 페이지 수집 실패 |
+| `ITEM_NOT_FOUND` | 404 | 없는 item_id 요청 |
+| `LISTING_NOT_FOUND` | 404 | `item_id`는 유효하지만 `/listing`으로 저장한 적 없음(또는 다른 user_id 소유) — B, `GET /api/v1/listing` 전용 |
+| `VALIDATION_ERROR` | 422 | 요청 형식 오류 (필수 필드 누락, item_ids 개수 위반 등) |
+| `INTERNAL_ERROR` | 500 | 서버 내부 오류 |
+
+---
+
+## Backend A — AI 분석 파이프라인
 
 **현재 상태**: 실제 분석 파이프라인 동작. `/analyze` 흐름:
 
@@ -28,38 +67,6 @@ scraper (매물 수집 — JSON-LD 우선, 실패 시 400 SCRAPE_FAILED)
   모두 존재하지 않음 (실측 확인) — 요청조차 보내지 않고 바로 `scrape_ok: False` 처리 →
   `SCRAPE_FAILED` 반환. 같은 매물이라도 `web.joongna.com` 링크는 정상 동작.
 
-## 실행
-
-```bash
-cd backend
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --reload --port 8000
-```
-
-- Swagger 문서: http://localhost:8000/docs
-- 상태 확인: `GET /health` (→ `upstage_key`로 Solar 연동 여부 확인)
-- DB: SQLite (`backend/resale_guard.db`, 자동 생성) — Supabase 전환 전 로컬용
-- Upstage 연동(선택): `cp .env.example .env` 후 `UPSTAGE_API_KEY` 입력 — 없어도 Rule Engine만으로 전부 동작
-- 테스트: `.venv/bin/python -m pytest tests/ -q`
-
-## 공통 응답 형식 (팀 컨벤션)
-
-```json
-성공: { "ok": true,  "data": { ... },  "error": null }
-실패: { "ok": false, "data": null,     "error": { "code": "...", "message": "..." } }
-```
-
-**모든 실패가 이 형식을 따른다** — 요청 검증 실패(422 `VALIDATION_ERROR`)와 서버 오류(500 `INTERNAL_ERROR`)도 전역 핸들러로 변환해둠. 프론트는 `error.code` / `error.message`만 믿고 처리하면 된다.
-
-| code | HTTP | 언제 |
-|---|---|---|
-| `SCRAPE_FAILED` | 400 | 매물 페이지 수집 실패 |
-| `ITEM_NOT_FOUND` | 404 | 없는 item_id 요청 |
-| `VALIDATION_ERROR` | 422 | 요청 형식 오류 (필수 필드 누락, item_ids 개수 위반 등) |
-| `INTERNAL_ERROR` | 500 | 서버 내부 오류 |
-
-## 엔드포인트
-
 ### POST `/api/v1/analyze` — 매물 URL 분석 ★핵심
 
 요청:
@@ -67,7 +74,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 { "user_id": "demo-user-1", "url": "https://www.daangn.com/articles/123456" }
 ```
 
-성공 200 — **`data` 스키마 (확정, 프론트 화면4·B /listing 이 여기 의존)**:
+성공 200 — **`data` 스키마 (확정, 프론트 화면4·B `/listing`이 여기 의존)**:
 ```json
 {
   "ok": true,
@@ -88,33 +95,15 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 }
 ```
 
-- `item_id`: **DB analysis_history의 PK** — 이후 모든 API(compare/checklist/inquiry-script)에서 이 값 사용
+- `item_id`: **DB analysis_history의 PK** — 이후 모든 API(compare/checklist/inquiry-script, B의 모든 엔드포인트)에서 이 값 사용
 - `trust_score`: 0~100 정수 (Rule Engine 계산, LLM 아님 — 재현성 보장)
-- `risk_level`: `"SAFE" | "WARNING" | "DANGER"`
+- `risk_level`: `"SAFE" | "WARNING" | "DANGER"` — ⚠️ 프론트 `RiskLevel`(`LOW|MEDIUM|HIGH`)과 값이 다름, 상세는 `backend/AGENTS.md`의 "risk_level enum이 프론트와 다름" 참고
 - `scam_warnings`: 문자열 배열 — SAFE면 보통 `[]`, WARNING/DANGER에서 채워짐
 
 실패 400:
 ```json
 { "ok": false, "data": null, "error": { "code": "SCRAPE_FAILED", "message": "매물 페이지를 불러오지 못했습니다. URL을 확인해주세요." } }
 ```
-
-### GET `/api/v1/history?user_id=&page=1&size=10` — 분석 히스토리 (최신순)
-
-```json
-{
-  "ok": true,
-  "data": {
-    "items": [
-      { "item_id": 3, "source_url": "...", "title": "...", "price": 1500000,
-        "trust_score": 18, "risk_level": "DANGER", "created_at": "2026-07-30T09:09:48Z" }
-    ],
-    "page": 1, "size": 10, "total": 3
-  },
-  "error": null
-}
-```
-
-`created_at`은 UTC(`Z` 접미사) — JS에서 `new Date(created_at)` 하면 자동으로 로컬시간(KST) 변환된다.
 
 ### POST `/api/v1/compare` — 매물 2~3개 비교
 
@@ -143,7 +132,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 공통: 존재하지 않는 `item_id` → 404 `ITEM_NOT_FOUND`.
 
-## 데모/테스트용 강제 트리거
+### 데모/테스트용 강제 트리거
 
 기본적으로 **모든 URL은 실제 분석 파이프라인**을 탄다 (번개장터 URL이 가장 잘 됨).
 프론트가 UI 상태별로 테스트하고 싶을 때만 `url`에 아래 단어를 포함:
@@ -155,15 +144,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `warning` | 고정 WARNING 매물 (trust_score 55) |
 | `mock-safe` | 고정 SAFE 매물 (trust_score 82) |
 
-analyze 할 때마다 DB에 저장되고 `item_id`가 1씩 증가한다. history/compare/checklist/inquiry-script는 **본인이 analyze한 item_id**로 호출할 것.
+analyze 할 때마다 DB에 저장되고 `item_id`가 1씩 증가한다. compare/checklist/inquiry-script와 B의 모든
+엔드포인트는 **본인이 analyze한 item_id**로 호출할 것.
 
-## DB 테이블 (3개)
-
-- `users(id TEXT PK, created_at)` — user_id는 프론트가 보내는 문자열 (인증 없음)
-- `analysis_history(id, user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json, created_at)` — 분석결과 통째로 JSON 저장
-- `bookmarks(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id)
-
-## 개발 로드맵 (Backend A)
+### 개발 로드맵 (Backend A)
 
 - [x] STEP 1: mock 서버 + 스키마 확정 + /docs
 - [x] STEP 2: DB 3테이블 + 저장/조회 연동
@@ -172,7 +156,130 @@ analyze 할 때마다 DB에 저장되고 `item_id`가 1씩 증가한다. history
 - [x] STEP 5: Rule Engine — `rule_engine.py` (시세비율·사기문구·판매자 신호 → 점수. 유닛테스트 12개)
 - [x] STEP 6: /analyze 통합 — `ai_report.py` (Upstage Solar 보강, 키 없으면 스킵) + DB 저장
 - [x] STEP 7: 나머지 API는 저장 데이터 재활용 (LLM 재호출 금지)
-
 - [x] STEP 8: 당근마켓/중고나라 스크래핑 정확도 개선 — JSON-LD 파싱 추가, `cafe.naver.com` 미지원 확인 및 정직한 실패 처리, `analyze()`가 `scrape_ok` 반영하도록 수정 (2026-08-01)
 
-남은 것: Supabase 전환(선택), 배포. (`cafe.naver.com` 실제 지원은 비공식 네이버 카페 API 연동이 필요 — 보류)
+남은 것(A): `cafe.naver.com` 실제 지원(비공식 네이버 카페 API 연동 필요 — 보류), Upstage Document
+Parse·Information Extract 실사용 여부(현재 스크래핑은 자체 정규식/JSON-LD, `AGENTS.md` 프로젝트
+개요의 "Document Parse로 구조화" 비전과 실제 구현 사이 괴리 있음 — A 확인 필요).
+
+---
+
+## Backend B — 서비스·DB
+
+찜·비교후보·거래상태·마이페이지·매물 확인 상세, 그리고 DB 계층(SQLite/Postgres) 담당.
+공통 `{ok,data,error}` 형식 동일, `item_id` 기준 404 `ITEM_NOT_FOUND` 처리 동일.
+
+### GET `/api/v1/history?user_id=&page=1&size=10` — 분석 히스토리 (최신순)
+
+A가 임시 제공하던 것을 B로 이관 완료(2026-08-02, 순수 코드 이동·API 계약 변경 없음).
+
+```json
+{
+  "ok": true,
+  "data": {
+    "items": [
+      { "item_id": 3, "source_url": "...", "title": "...", "price": 1500000,
+        "trust_score": 18, "risk_level": "DANGER", "created_at": "2026-07-30T09:09:48Z" }
+    ],
+    "page": 1, "size": 10, "total": 3
+  },
+  "error": null
+}
+```
+
+`created_at`은 UTC(`Z` 접미사) — JS에서 `new Date(created_at)` 하면 자동으로 로컬시간(KST) 변환된다.
+
+### POST `/api/v1/listing` — 화면2 확인된 매물 상세 저장 (upsert)
+
+요청:
+```json
+{
+  "user_id": "demo-user-1", "item_id": 1,
+  "title": "아이폰 13 프로 256GB", "price": 850000,
+  "model_name": "iPhone 13 Pro", "year": "2021", "size_or_capacity": "256GB",
+  "color": "그래파이트", "usage_period": "6개월",
+  "components": ["박스", "충전기"], "defects": ["액정 미세 스크래치"]
+}
+```
+성공 200: `data`는 요청 필드 그대로 + `updated_at`. 매 호출마다 전체 덮어쓰기(`analysis_id`당 1행) —
+재확인 시 그냥 다시 POST하면 됨.
+
+### GET `/api/v1/listing?user_id=&item_id=` — 저장된 매물 상세 조회 (2026-08-02 추가)
+
+성공 200: POST와 동일한 `data`.
+실패: `item_id`가 `analysis_history`에 없음 → `404 ITEM_NOT_FOUND` / 있지만 아직 저장한 적 없거나
+다른 user_id 소유 → `404 LISTING_NOT_FOUND`.
+
+### POST/DELETE/GET `/api/v1/bookmark` — 찜
+
+- `POST { "user_id", "item_id" }` → `{ "item_id", "bookmarked": true|false }` (이미 찜한 상태면 `false`)
+- `DELETE ?user_id=&item_id=` → `{ "item_id", "removed": bool }`
+- `GET ?user_id=` → `{ "items": [ /* analyze data 배열 */ ], "total": int }`
+
+### POST/DELETE/GET `/api/v1/comparison` — 비교 후보 목록
+
+`/bookmark`와 동일 패턴, 응답 필드만 `added`/`removed`.
+
+### POST/GET `/api/v1/transaction` — 거래 상태 (화면5 구매 결정 저장)
+
+**2026-08-02 재설계**: 진행단계(`stage`)와 판단(`decision`)이 프론트 화면상 독립된 2축이라 컬럼도
+분리(이전엔 `status` 단일 5값 enum이었음).
+
+```json
+{ "user_id": "demo-user-1", "item_id": 1, "stage": "CONTACTING", "decision": "CONSIDERING" }
+```
+- `stage`(필수): `BEFORE_CONTACT | CONTACTING | SCHEDULED | COMPLETED`
+- `decision`(optional/nullable): `CONSIDERING | HOLD | EXCLUDED`
+- POST는 매 호출마다 **두 필드 전체 덮어쓰기** — `decision` 생략 시 `NULL`로 리셋되니 유지하고 싶은
+  값은 항상 같이 보낼 것
+- `GET ?user_id=&stage=&decision=` — 둘 다 optional 필터, 같이 주면 AND
+
+### GET `/api/v1/mypage?user_id=&recent_limit=` — 마이페이지 상단 요약
+
+```json
+{
+  "ok": true,
+  "data": {
+    "analysis_count": 2, "bookmark_count": 1, "comparison_count": 2, "transaction_completed_count": 1,
+    "recent_analyses": [ /* history item 배열, recent_limit 기본 5 */ ]
+  },
+  "error": null
+}
+```
+`recent_analyses`는 기존 `/history` 로직 재사용(2026-08-02 추가) — 프론트 마이페이지 "기록" 섹션용.
+"추천" 섹션과 매물 `location` 필드는 백엔드에 실데이터가 없어서 의도적으로 안 만듦(지어내지 않음).
+
+### 개발 로드맵 (Backend B)
+
+- [x] 찜·비교후보·거래상태·마이페이지 API 구현 (2026-07-31)
+- [x] FK 제약 버그 수정 (`PRAGMA foreign_keys=ON`), Windows 인코딩 오류 수정 (2026-07-31)
+- [x] `/listing` POST 구현 — 화면2 확인 매물 상세 upsert (2026-08-02)
+- [x] `/history`를 A로부터 이관 (2026-08-02, 코드 위치까지 실제 이동·동작 변경 없음)
+- [x] `/transaction`: `status` 단일 enum → `stage`+`decision` 2축 재설계 (2026-08-02)
+- [x] `/mypage`: `recent_analyses` 번들 추가 (2026-08-02)
+- [x] `/listing` GET 추가 — 화면2 재확인 시나리오 대비 (2026-08-02)
+- [x] SQLite ↔ Postgres(Supabase) 이중 백엔드 지원 — 코드 준비 완료 (2026-08-02, 아래 참고)
+- [x] `risk_level` enum이 프론트와 다른 문제 확인·문서화, 프론트 매핑 제안 (2026-08-02)
+- [ ] 실제 Supabase 프로젝트 생성 및 연결 검증 — `init_db()`의 Postgres 다중 SQL문 실행이 실제
+      네트워크에서 되는지 아직 미확인 (코드는 준비됨, 계정만 만들면 됨)
+
+남은 것(B): 위 Supabase 연결 검증, 배포.
+
+## DB 테이블 (6개)
+
+- `users(id TEXT PK, created_at)` — user_id는 프론트가 보내는 문자열 (인증 없음)
+- `analysis_history(id, user_id, source_url, title, price, trust_score, risk_level, raw_analysis_json, created_at)` — 분석결과 통째로 JSON 저장 (A 생성)
+- `bookmarks(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id) (A 생성, B가 엔드포인트 구현)
+- `transaction_status(id, user_id, analysis_id, stage, decision, created_at, updated_at)` — UNIQUE(user_id, analysis_id) (B, 2026-07-31 생성 → 2026-08-02 2축 재설계)
+- `comparison_items(id, user_id, analysis_id, created_at)` — UNIQUE(user_id, analysis_id), bookmarks와 동일 구조 (B, 2026-07-31)
+- `listing_details(id, user_id, analysis_id, title, price, model_name, year, size_or_capacity, color, usage_period, components_json, defects_json, created_at, updated_at)` — UNIQUE(user_id, analysis_id) (B, 2026-08-02)
+
+## SQLite ↔ Postgres(Supabase) 이중 백엔드
+
+`DATABASE_URL` 환경변수 유무로 자동 분기 — 없으면 SQLite(로컬 개발·테스트 기본값, 무변경),
+있으면 Postgres(psycopg2). 스키마 파일 2개: `backend/app/schema.sql`(SQLite) /
+`backend/app/schema_postgres.sql`(Postgres, 차이는 `AUTOINCREMENT`→`BIGSERIAL`뿐).
+`DATABASE_URL` 형식·PgBouncer 풀러 권장 사항은 `.env.example` 참고. 상세 설계는 `backend/AGENTS.md`
+"SQLite ↔ Postgres(Supabase) 이중 백엔드" 절 참고.
+
+⚠️ 아직 실제 Supabase 인스턴스로 스모크 테스트 전 — `init_db()`의 다중 SQL문 실행 검증이 남아있음.
