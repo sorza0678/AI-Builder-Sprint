@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,6 +7,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text } from '@/src/components/pretendard-text';
 
 import { AnalysisResult } from '@/src/types/marketplace';
+import { addToComparisonCart } from '@/src/repositories/comparison-cart-repository';
+import {
+  getServerItemIdFromAnalysis,
+  isListingSaved,
+  toggleSavedListing,
+} from '@/src/repositories/saved-listing-repository';
 
 const assets = {
   arrow: require('@/assets/images/analysis-input/arrow-left.svg'),
@@ -75,6 +81,7 @@ function TimelineGroup({ title, items, unknown = false, last = false }: Timeline
 
 export function AnalysisResultView({ result }: AnalysisResultViewProps) {
   const [saved, setSaved] = useState(false);
+  const serverItemId = useMemo(() => getServerItemIdFromAnalysis(result), [result]);
   const priceDifference = result.marketPrice.average - result.listing.price;
   const discountRate =
     result.marketPrice.average > 0
@@ -100,6 +107,30 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
     `${result.listing.usagePeriod} 사용`,
   ];
 
+  useEffect(() => {
+    let mounted = true;
+
+    isListingSaved(serverItemId).then((isSaved) => {
+      if (mounted) {
+        setSaved(isSaved);
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [serverItemId]);
+
+  const toggleSaved = async (): Promise<void> => {
+    const nextState = await toggleSavedListing(result);
+    setSaved(nextState.saved);
+  };
+
+  const addCurrentListingToComparison = async (): Promise<void> => {
+    await addToComparisonCart(serverItemId);
+    router.push('/compare');
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <View style={styles.header}>
@@ -116,7 +147,7 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
           accessibilityRole="button"
           accessibilityState={{ selected: saved }}
           hitSlop={10}
-          onPress={() => setSaved((value) => !value)}
+          onPress={toggleSaved}
           style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
           <Image
             source={saved ? assets.heartFilled : assets.heart}
@@ -306,7 +337,7 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
         <Pressable
           accessibilityLabel="매물 비교하기"
           accessibilityRole="button"
-          onPress={() => router.push('/compare')}
+          onPress={addCurrentListingToComparison}
           style={({ pressed }) => [styles.compareButton, pressed && styles.pressed]}>
           <Image source={assets.compare} style={styles.compareIcon} contentFit="contain" />
         </Pressable>

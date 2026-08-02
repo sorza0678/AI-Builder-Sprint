@@ -21,6 +21,11 @@ import { getRecentListings } from '@/src/services/listing-service';
 import { AnalysisDraft, SelectedImage } from '@/src/types/analysis-input';
 import { Listing } from '@/src/types/marketplace';
 import { getUrlError, normalizeUrl } from '@/src/utils/url-validation';
+import {
+  clearAnalysisDraft,
+  getAnalysisDraft,
+  saveAnalysisDraft,
+} from '@/src/repositories/analysis-draft-repository';
 
 export default function AnalysisInputScreen() {
   const params = useLocalSearchParams<{
@@ -59,6 +64,17 @@ export default function AnalysisInputScreen() {
 
   useEffect(() => {
     let active = true;
+    const hasInitialParams = initialUrl.length > 0 || initialImageUri.length > 0;
+
+    if (!hasInitialParams) {
+      getAnalysisDraft().then((storedDraft) => {
+        if (active && (storedDraft.draft.url || storedDraft.draft.image)) {
+          setUrl(storedDraft.draft.url);
+          setSelectedImage(storedDraft.draft.image);
+        }
+      });
+    }
+
     getRecentListings()
       .then((items) => {
         if (active) {
@@ -73,7 +89,21 @@ export default function AnalysisInputScreen() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialImageUri.length, initialUrl.length]);
+
+  useEffect(() => {
+    const draft: AnalysisDraft = {
+      url,
+      image: selectedImage,
+    };
+
+    if (!draft.url && !draft.image) {
+      clearAnalysisDraft();
+      return;
+    }
+
+    saveAnalysisDraft(draft);
+  }, [selectedImage, url]);
 
   const draftListing = useMemo(() => {
     if (!candidate || !pendingInput) {
@@ -176,6 +206,7 @@ export default function AnalysisInputScreen() {
     try {
       // TODO: 실제 분석 API 연결 시 pendingInput과 확인된 listing 정보를 전송하도록 교체
       const result = await createMockAnalysis(listing);
+      await clearAnalysisDraft();
       setSheetVisible(false);
       router.replace(`/analysis/${result.id}`);
     } catch {

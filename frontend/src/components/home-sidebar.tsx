@@ -98,16 +98,14 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="찜한상품"
-                  // TODO: 찜한상품 화면 경로가 확정되면 연결
-                  onPress={() => undefined}
+                  onPress={() => navigate('/saved-listings')}
                   style={({ pressed }) => [styles.quickLink, styles.quickLinkDivider, pressed && styles.pressed]}>
                   <Text style={styles.quickLinkText}>찜한상품</Text>
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="분석기록"
-                  // TODO: 분석기록 화면 경로가 확정되면 연결
-                  onPress={() => undefined}
+                  onPress={() => navigate('/recent-analyses')}
                   style={({ pressed }) => [styles.quickLink, pressed && styles.pressed]}>
                   <Text style={styles.quickLinkText}>분석기록</Text>
                 </Pressable>
@@ -139,6 +137,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="비교기록"
                   icon={require('@/assets/images/sidebar/comparison-history.svg')}
                   iconSize={{ width: 22.715, height: 22.125 }}
+                  href="/comparison-history"
                   onNavigate={navigate}
                 />
                 <MenuRow
@@ -159,6 +158,7 @@ export function HomeSidebar({ visible, onClose }: HomeSidebarProps) {
                   label="거래내역"
                   icon={require('@/assets/images/sidebar/receipt.svg')}
                   iconSize={{ width: 19.333, height: 23.667 }}
+                  href="/trade-records"
                   onNavigate={navigate}
                 />
                 <MenuRow

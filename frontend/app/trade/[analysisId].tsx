@@ -23,7 +23,20 @@ import {
   TradeQuestion,
 } from '@/src/mocks/trade-preparation';
 import { getAnalysisResult } from '@/src/services/analysis-service';
-import { AnalysisResult } from '@/src/types/marketplace';
+import { AnalysisResult, TradeStatus } from '@/src/types/marketplace';
+import {
+  saveGeneratedChecklist,
+  toggleChecklistItem,
+} from '@/src/repositories/checklist-progress-repository';
+import {
+  getServerItemIdFromAnalysis,
+  isListingSaved,
+  toggleSavedListing,
+} from '@/src/repositories/saved-listing-repository';
+import {
+  getTradeRecord,
+  saveTradeRecord,
+} from '@/src/repositories/trade-record-repository';
 
 const STEPS = ['문의', '확인', '가격', '진행'] as const;
 type TradeStep = 'inquiry' | 'check' | 'price' | 'progress';
@@ -190,13 +203,28 @@ function QuestionCard({
   );
 }
 
-function CheckStepContent() {
+function CheckStepContent({ serverItemId }: { serverItemId: number }) {
   const [method, setMethod] = useState<TradeMethod>('inPerson');
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [excludedIds, setExcludedIds] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>(['seller-identity']);
 
-  const toggleChecked = (item: TradeChecklistItem): void => {
+  useEffect(() => {
+    let mounted = true;
+    const checklist = TRADE_CHECKLIST_ITEMS.map((item) => ({ id: item.id, text: item.text }));
+
+    saveGeneratedChecklist(serverItemId, checklist).then((progress) => {
+      if (mounted) {
+        setCheckedIds(progress.items.filter((item) => item.checked).map((item) => item.id));
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [serverItemId]);
+
+  const toggleChecked = async (item: TradeChecklistItem): Promise<void> => {
     if (isChecklistItemDisabled(item, method)) {
       return;
     }
@@ -205,6 +233,7 @@ function CheckStepContent() {
 
     if (!checked && !excluded) {
       setCheckedIds((current) => [...current, item.id]);
+      await toggleChecklistItem(serverItemId, item.id);
       return;
     }
 
@@ -212,6 +241,7 @@ function CheckStepContent() {
       setCheckedIds((current) => current.filter((id) => id !== item.id));
       setExcludedIds((current) => [...current, item.id]);
       setExpandedIds((current) => current.filter((id) => id !== item.id));
+      await toggleChecklistItem(serverItemId, item.id);
       return;
     }
 
@@ -535,12 +565,65 @@ function PriceStepContent({ onCopyMessage }: { onCopyMessage: () => void }) {
   );
 }
 
-function ProgressStepContent() {
+function mapProgressStepToTradeStatus(progressStep: TradeProgressStep): TradeStatus {
+  if (progressStep === 'scheduled') {
+    return 'SCHEDULED';
+  }
+  if (progressStep === 'completed') {
+    return 'COMPLETED';
+  }
+  return 'CONTACTED';
+}
+
+function ProgressStepContent({ result, serverItemId }: { result: AnalysisResult; serverItemId: number }) {
   const [progressStep, setProgressStep] = useState<NullableTradeProgressStep>(null);
   const [decision, setDecision] = useState<NullableTradeDecision>(null);
   const activeIndex = progressStep
     ? PROGRESS_STEPS.findIndex((step) => step.value === progressStep)
     : -1;
+
+  useEffect(() => {
+    let mounted = true;
+
+    getTradeRecord(serverItemId).then((record) => {
+      if (!mounted || !record) {
+        return;
+      }
+
+      if (record.status === 'SCHEDULED') {
+        setProgressStep('scheduled');
+      } else if (record.status === 'COMPLETED') {
+        setProgressStep('completed');
+      } else if (record.status === 'CONTACTED') {
+        setProgressStep('contacting');
+      }
+
+      if (record.memo === 'considering' || record.memo === 'hold' || record.memo === 'excluded') {
+        setDecision(record.memo);
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [serverItemId]);
+
+  const selectProgressStep = async (nextStep: TradeProgressStep): Promise<void> => {
+    setProgressStep(nextStep);
+    await saveTradeRecord(result, mapProgressStepToTradeStatus(nextStep), {
+      completedAt: nextStep === 'completed' ? new Date().toISOString() : undefined,
+      memo: decision ?? undefined,
+    });
+  };
+
+  const selectDecision = async (nextDecision: TradeDecision): Promise<void> => {
+    setDecision(nextDecision);
+    await saveTradeRecord(
+      result,
+      progressStep ? mapProgressStepToTradeStatus(progressStep) : 'INTERESTED',
+      { memo: nextDecision },
+    );
+  };
 
   return (
     <View style={styles.progressPage}>
@@ -578,7 +661,7 @@ function ProgressStepContent() {
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
                   key={step.value}
-                  onPress={() => setProgressStep(step.value)}
+                  onPress={() => selectProgressStep(step.value)}
                   style={({ pressed }) => [styles.tradeStepperItem, pressed && styles.pressed]}>
                   <View
                     style={[
@@ -623,7 +706,7 @@ function ProgressStepContent() {
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
                 key={item.value}
-                onPress={() => setDecision(item.value)}
+                onPress={() => selectDecision(item.value)}
                 style={({ pressed }) => [
                   styles.tradeDecisionButton,
                   selected && styles.tradeDecisionButtonSelected,
@@ -657,7 +740,8 @@ export default function TradePreparationScreen() {
   ]);
   const [visibleReasonIds, setVisibleReasonIds] = useState<string[]>([]);
   const [activeStep, setActiveStep] = useState<TradeStep>('inquiry');
-  const [favorite, setFavorite] = useState(true);
+  const [favorite, setFavorite] = useState(false);
+  const serverItemId = useMemo(() => (result ? getServerItemIdFromAnalysis(result) : 0), [result]);
 
   useEffect(() => {
     let active = true;
@@ -682,6 +766,31 @@ export default function TradePreparationScreen() {
       active = false;
     };
   }, [id]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    if (serverItemId > 0) {
+      isListingSaved(serverItemId).then((isSaved) => {
+        if (mounted) {
+          setFavorite(isSaved);
+        }
+      });
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [serverItemId]);
+
+  const toggleFavorite = async (): Promise<void> => {
+    if (!result) {
+      return;
+    }
+
+    const nextState = await toggleSavedListing(result);
+    setFavorite(nextState.saved);
+  };
 
   const selectedQuestions = useMemo(
     () => TRADE_QUESTIONS.filter((question) => selectedIds.includes(question.id)),
@@ -770,7 +879,7 @@ export default function TradePreparationScreen() {
           accessibilityRole="button"
           accessibilityState={{ selected: favorite }}
           hitSlop={8}
-          onPress={() => setFavorite((current) => !current)}
+          onPress={toggleFavorite}
           style={({ pressed }) => [styles.headerButton, styles.headerButtonRight, pressed && styles.pressed]}>
           <Image
             contentFit="contain"
@@ -883,11 +992,11 @@ export default function TradePreparationScreen() {
         </View>
           </>
         ) : activeStep === 'check' ? (
-          <CheckStepContent />
+          <CheckStepContent serverItemId={serverItemId} />
         ) : activeStep === 'price' ? (
           <PriceStepContent onCopyMessage={copyPriceMessage} />
         ) : (
-          <ProgressStepContent />
+          <ProgressStepContent result={result} serverItemId={serverItemId} />
         )}
       </ScrollView>
     </SafeAreaView>
