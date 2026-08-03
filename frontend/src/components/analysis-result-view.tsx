@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -87,10 +88,20 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
   const insets = useSafeAreaInsets();
   const [saved, setSaved] = useState(false);
   const serverItemId = Number(result.id);
-  useEffect(() => {
-    if (!Number.isInteger(serverItemId)) return;
-    getBookmarks().then(({ items }) => setSaved(items.some((item) => item.item_id === serverItemId))).catch(() => undefined);
-  }, [serverItemId]);
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    if (!Number.isInteger(serverItemId)) return undefined;
+
+    void getBookmarks()
+      .then(({ items }) => {
+        if (active) setSaved(items.some((item) => item.item_id === serverItemId));
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
+  }, [serverItemId]));
   const priceDifference = result.marketPrice.average - result.listing.price;
   const discountRate =
     result.marketPrice.average > 0

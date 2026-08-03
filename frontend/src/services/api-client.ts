@@ -22,7 +22,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
       signal: controller.signal,
-      headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(session ? { Authorization: `Bearer ${session.token}` } : {}), ...init?.headers },
+      headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}), ...init?.headers },
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {

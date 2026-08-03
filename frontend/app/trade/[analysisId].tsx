@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AppButton, AppTextInput, ErrorState, LoadingState } from '@/src/components/common';
+import { AppTextInput, ErrorState, LoadingState } from '@/src/components/common';
 import { Text } from '@/src/components/pretendard-text';
 import {
   TradeChecklistItem,
@@ -911,11 +911,21 @@ function ProgressStepContent({
           />
         </View>
 
-        <AppButton
+        <Pressable
+          accessibilityLabel="거래 준비 정보 저장"
+          accessibilityRole="button"
           disabled={savingPlan}
           onPress={savePlan}
-          title={savingPlan ? '저장 중...' : '거래 준비 정보 저장'}
-        />
+          style={({ pressed }) => [
+            styles.planSaveButton,
+            savingPlan && styles.planSaveButtonDisabled,
+            pressed && !savingPlan && styles.pressed,
+          ]}
+        >
+          <Text style={styles.planSaveButtonText}>
+            {savingPlan ? '저장 중...' : '거래 준비 정보 저장'}
+          </Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -2020,6 +2030,22 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: -0.3,
     textAlignVertical: 'top',
+  },
+  planSaveButton: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: '#8656C2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planSaveButtonDisabled: {
+    opacity: 0.7,
+  },
+  planSaveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   pressed: { opacity: 0.65 },
 });

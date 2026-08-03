@@ -748,7 +748,7 @@ const styles = StyleSheet.create({
   },
   riskPopup: {
     position: 'absolute',
-    top: 52,
+    bottom: 52,
     left: 0,
     zIndex: 30,
     width: 164,
