@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -142,6 +143,16 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
       ? result.conditionDefects.map((defect) =>
           defect.severity ? `${defect.name} (${defectSeverityLabel[defect.severity]})` : defect.name)
       : ['확인된 하자 없음'];
+  const sourceUrl = result.listing.sourceUrl.trim();
+
+  const openSourceListing = async (): Promise<void> => {
+    if (!sourceUrl) return;
+    try {
+      await Linking.openURL(sourceUrl);
+    } catch {
+      Alert.alert('원본 링크 열기 실패', '상품 링크를 열 수 없습니다.');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -154,23 +165,34 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps) {
           style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
           <Image source={assets.arrow} style={styles.arrowIcon} contentFit="contain" />
         </Pressable>
-        <Pressable
-          accessibilityLabel={saved ? '찜 해제' : '찜하기'}
-          accessibilityRole="button"
-          accessibilityState={{ selected: saved }}
-          hitSlop={10}
-          onPress={async () => {
-            if (!Number.isInteger(serverItemId)) return;
-            if (saved) await removeBookmark(serverItemId); else await addBookmark(serverItemId);
-            setSaved(!saved);
-          }}
-          style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
-          <Image
-            source={saved ? assets.heartFilled : assets.heart}
-            style={styles.heartIcon}
-            contentFit="contain"
-          />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            accessibilityLabel="원본 상품 링크 열기"
+            accessibilityRole="link"
+            disabled={!sourceUrl}
+            hitSlop={6}
+            onPress={openSourceListing}
+            style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
+            <Ionicons color={sourceUrl ? '#515760' : '#C5CAD1'} name="open-outline" size={24} />
+          </Pressable>
+          <Pressable
+            accessibilityLabel={saved ? '찜 해제' : '찜하기'}
+            accessibilityRole="button"
+            accessibilityState={{ selected: saved }}
+            hitSlop={10}
+            onPress={async () => {
+              if (!Number.isInteger(serverItemId)) return;
+              if (saved) await removeBookmark(serverItemId); else await addBookmark(serverItemId);
+              setSaved(!saved);
+            }}
+            style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}>
+            <Image
+              source={saved ? assets.heartFilled : assets.heart}
+              style={styles.heartIcon}
+              contentFit="contain"
+            />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView
@@ -454,6 +476,7 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
   arrowIcon: { width: 16, height: 16 },
   heartIcon: { width: 24, height: 24 },
   scrollContent: { paddingBottom: 96 },
