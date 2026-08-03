@@ -1,18 +1,59 @@
 """SQLite/Postgres(Supabase) 이중 백엔드 연결 + CRUD.
 
 DATABASE_URL 환경변수가 있으면 Postgres(psycopg2), 없으면 SQLite(로컬 개발/테스트) 사용.
+psycopg2 는 Postgres 를 실제로 쓸 때만 지연 import 한다 — 최상단에서 import 하면
+SQLite 만 쓰는 사람도 psycopg2 가 없으면 이 모듈 import 자체가 실패해서,
+docstring 의 "없으면 SQLite" 가 거짓말이 된다.
 """
 import json
 import logging
 import os
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-import psycopg2
-import psycopg2.extras
-
 logger = logging.getLogger(__name__)
+
+_UTC = timezone.utc
+
+
+class _PsycopgUnavailable(Exception):
+    """psycopg2 미설치 시 except 절 자리를 채우는 더미 — 아무도 던지지 않으므로 절대 매치되지 않는다."""
+
+
+_psycopg2_module = None
+_psycopg2_loaded = False
+
+
+def _psycopg2(required: bool = True):
+    """psycopg2 지연 로드 (한 번만 시도하고 캐시).
+
+    required=False 는 except 절처럼 "있으면 쓰고 없으면 그냥 넘어가는" 자리에서 쓴다.
+    Postgres 경로에서 없으면 import 실패 대신 원인이 분명한 에러를 낸다.
+    """
+    global _psycopg2_module, _psycopg2_loaded
+    if not _psycopg2_loaded:
+        _psycopg2_loaded = True
+        try:
+            import psycopg2
+            import psycopg2.extras  # RealDictCursor — 서브모듈은 따로 import 해야 붙는다
+
+            _psycopg2_module = psycopg2
+        except ImportError:
+            _psycopg2_module = None
+    if _psycopg2_module is None and required:
+        raise RuntimeError(
+            "DATABASE_URL 이 설정됐지만 psycopg2 가 설치돼 있지 않습니다. "
+            "pip install psycopg2-binary 후 다시 시도하세요."
+        )
+    return _psycopg2_module
+
+
+def _integrity_errors() -> tuple:
+    """UNIQUE/FK 위반 예외 튜플 — psycopg2 가 없으면 더미로 채워 except 절이 그대로 동작한다."""
+    pg = _psycopg2(required=False)
+    return (sqlite3.IntegrityError, pg.IntegrityError if pg else _PsycopgUnavailable)
 
 _APP_DIR = Path(__file__).resolve().parent
 DATABASE = _APP_DIR.parent / "resale_guard.db"
@@ -32,19 +73,118 @@ def _execute(conn, sql: str, params=()):
     return cur
 
 
-def _iso_z(value) -> str:
-    """DB에서 읽은 타임스탬프를 ISO+'Z' 문자열로. sqlite3는 str, psycopg2는 datetime을 반환."""
-    if isinstance(value, str):
-        return value.replace(" ", "T") + "Z"
-    return value.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+def _parse_ts(text: str) -> datetime | None:
+    """타임스탬프 문자열 → datetime. 알 수 없는 형식이면 None (호출부가 원본을 그대로 쓴다)."""
+    candidate = text.strip()
+    if not candidate:
+        return None
+    # fromisoformat 은 3.11+ 에서만 'Z' 를 읽으므로 미리 오프셋으로 바꿔둔다
+    if candidate.endswith(("Z", "z")):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+
+
+def _to_naive_utc(parsed: datetime) -> datetime | None:
+    """tz-aware datetime → 타임존 벗긴 UTC. 환산이 표현 범위를 넘으면 None.
+
+    datetime 은 서기 1~9999년만 표현할 수 있어서, 경계에 붙은 값
+    ('0001-01-01T00:00:00+14:00')에 오프셋을 적용하면 OverflowError 가 난다.
+    이 예외가 새어나가면 조회/저장이 통째로 500 이 되므로, 여기서 None 으로 바꿔
+    호출부가 "환산 못 함" 을 정상 분기로 처리하게 한다 (예외를 숨기는 게 아니라,
+    변환 불가라는 사실을 반환값으로 표현하는 것).
+    입력 단계(schemas.TransactionRequest)에서 이미 422 로 걸러지므로 여기는 이중 방어다.
+    """
+    if parsed.tzinfo is None:
+        return parsed
+    try:
+        return parsed.astimezone(_UTC).replace(tzinfo=None)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _iso_z(value) -> str | None:
+    """DB에서 읽은 타임스탬프를 ISO-8601 UTC 문자열('...Z')로 정규화.
+
+    sqlite3 는 str, psycopg2 는 datetime 을 돌려준다. 그런데 meeting_at 처럼 사용자가 보낸
+    값은 이미 오프셋이 붙은 채('2026-08-05 06:00:00+00:00') 저장돼 있을 수 있고, 여기에
+    무조건 'Z' 를 덧붙이면 '...+00:00Z' 라는 타임존 두 번짜리 문자열이 만들어져
+    Pydantic 응답 검증이 깨진다 (→ 500). 그래서 세 갈래로 나눈다:
+
+    - 이미 오프셋/'Z' 가 있으면 → UTC 로 환산해서 'Z' 형식으로 통일 (오프셋을 잘라내
+      시각을 바꾸지 않는다. +09:00 은 -9시간 해서 같은 순간을 유지)
+    - 타임존이 없으면(SQLite CURRENT_TIMESTAMP) → 기존과 동일하게 UTC 로 보고 'Z' 부착
+    - datetime 이 tz-aware 면 → UTC 로 변환 후 'Z' (예전 strftime 은 오프셋을 조용히
+      버려서 시각이 틀어졌다)
+
+    결과 형식이 항상 하나로 수렴하므로 여러 번 적용해도 안전하다(멱등).
+    """
+    if value is None:
+        return None  # 호출부가 대부분 조건문으로 거르지만, 여기서도 터지지 않게 한다
+    if isinstance(value, datetime):
+        naive = _to_naive_utc(value)
+        if naive is None:
+            # UTC 로 못 옮기는 극단값 — 오프셋을 단 원본 ISO 로 내보낸다.
+            # 시각이 보존되고 Pydantic 도 읽을 수 있어서, 500 대신 정상 응답이 된다.
+            return value.isoformat()
+        return naive.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+    text = str(value).strip()
+    date_part, sep, time_part = text.replace(" ", "T", 1).partition("T")
+    if not sep:
+        # 날짜만 있는 값 — 'Z' 를 붙이면 오히려 파싱 불가가 되므로 그대로 둔다
+        return text
+    if time_part.endswith(("Z", "z")) or "+" in time_part or "-" in time_part:
+        parsed = _parse_ts(text)
+        if parsed is None:
+            return date_part + "T" + time_part  # 못 읽으면 최소한 이중 타임존은 만들지 않는다
+        naive = _to_naive_utc(parsed)
+        if naive is None:
+            return parsed.isoformat()  # 위 datetime 갈래와 같은 이유 (극단 오프셋)
+        return naive.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+    # 소수점 이하 초는 버린다 — 위 두 갈래(strftime)와 초 단위로 형식을 맞춰야 "단일 형식"이
+    # 되고, 그래야 몇 번을 다시 통과시켜도 결과가 같다. SQLite CURRENT_TIMESTAMP 는
+    # 애초에 소수점이 없으므로 기존 동작('2026-08-02T16:58:42Z')은 그대로다.
+    return date_part + "T" + time_part.split(".", 1)[0] + "Z"
+
+
+def _normalize_meeting_at(value) -> str | None:
+    """저장 직전 meeting_at 정규화 — 항상 UTC 기준 'YYYY-MM-DD HH:MM:SS'.
+
+    main.py 가 datetime.isoformat(sep=' ') 로 넘기기 때문에, 프론트가 tz-aware 값을
+    보내면 '+00:00' 같은 오프셋이 그대로 저장된다. 읽기(_iso_z)만 고치면 DB 에는 계속
+    형식이 뒤섞인 값이 쌓이고 정렬·비교도 어긋나므로, 쓰는 시점에 UTC 로 통일한다.
+    (naive 값은 _iso_z 와 같은 규칙으로 UTC 로 간주 — 왕복해도 시각이 안 변한다.)
+    이미 저장된 오프셋 포함 행은 _iso_z 가 처리하므로 마이그레이션은 필요 없다.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        parsed = _parse_ts(text)
+        if parsed is None:
+            return text  # 알 수 없는 형식은 건드리지 않는다 (사용자 입력을 임의로 버리지 않음)
+    naive = _to_naive_utc(parsed)
+    if naive is None:
+        # UTC 로 못 옮기는 극단값은 오프셋을 유지한 채 저장한다 — 읽을 때 _iso_z 가
+        # 같은 방식으로 되돌려주므로 시각이 어긋나지 않는다 (버리는 것보다 낫다).
+        return parsed.isoformat(sep=" ")
+    return naive.strftime("%Y-%m-%d %H:%M:%S")
 
 
 @contextmanager
 def get_db():
     if _is_postgres():
-        conn = psycopg2.connect(
+        pg = _psycopg2()
+        conn = pg.connect(
             os.environ["DATABASE_URL"],
-            cursor_factory=psycopg2.extras.RealDictCursor,
+            cursor_factory=pg.extras.RealDictCursor,
         )
         try:
             yield conn
@@ -268,7 +408,7 @@ def bookmark(user_id: str, analysis_id: int) -> bool:
             )
             conn.commit()
             return True
-        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+        except _integrity_errors():
             conn.rollback()
             return False  # 이미 북마크됨 또는 invalid analysis_id
 
@@ -417,7 +557,8 @@ def upsert_transaction_status(
             """,
             (
                 user_id, analysis_id, stage, decision,
-                plan.get("meeting_at"), plan.get("meeting_place"),
+                # 오프셋이 섞인 값이 그대로 쌓이지 않도록 저장 시점에 UTC 로 정규화
+                _normalize_meeting_at(plan.get("meeting_at")), plan.get("meeting_place"),
                 plan.get("trade_method"), plan.get("memo"), plan.get("payment_method"),
             ),
         )
@@ -489,7 +630,7 @@ def add_comparison_item(user_id: str, analysis_id: int) -> bool:
             )
             conn.commit()
             return True
-        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+        except _integrity_errors():
             conn.rollback()
             return False
 
@@ -857,7 +998,7 @@ def migrate_guest(account_id: str, guest_id: str) -> dict:
             )
             conn.commit()
             return counts
-        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+        except _integrity_errors():
             # 계정과 guest가 같은 analysis_id 를 각자 찜/비교/거래에 담고 있으면
             # UNIQUE(user_id, analysis_id) 충돌 — 불투명한 500 대신 명확한 409 로 변환.
             # (소유권 검증으로 정상 경로에선 발생 불가하지만 이중 방어)

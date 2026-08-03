@@ -4,15 +4,30 @@
   성공 { "ok": true,  "data": {...}, "error": null }
   실패 { "ok": false, "data": null,  "error": {"code": "...", "message": "..."} }
 """
-from datetime import datetime
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 RiskLevel = Literal["SAFE", "WARNING", "DANGER"]
 
 
 # ---------- 공통 ----------
+
+# SQLite/Postgres 의 INTEGER 는 64비트다. 그 범위를 벗어난 정수가 드라이버까지 내려가면
+# "Python int too large to convert to SQLite INTEGER"(OverflowError)가 나면서,
+# 존재하지 않는 id 라 404 여야 할 요청이 500 으로 떨어진다 (12개 엔드포인트에서 확인).
+# 범위 밖 정수는 애초에 어떤 행과도 매치될 수 없으니 입력 단계에서 422 로 거른다 —
+# 잃는 기능이 없고, DB 계층까지 갈 일 자체를 없앤다.
+# 0·음수는 지금까지처럼 통과시켜 404 를 받게 둔다 (기존 동작을 바꾸지 않기 위함).
+#
+# 주의: body 필드와 path 파라미터는 DbId 를 그대로 쓰면 되지만, 쿼리 파라미터는
+# `item_id: DbId = Query(...)` 로 쓰면 Query 가 Annotated 의 Field 메타데이터를 덮어써서
+# 범위 제한이 사라진다. 그래서 main.py 의 쿼리 파라미터는 Query(ge=..., le=...) 로 직접 준다.
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
+DbId = Annotated[int, Field(ge=INT64_MIN, le=INT64_MAX)]
+
 
 class ErrorBody(BaseModel):
     code: str = Field(examples=["SCRAPE_FAILED"])
@@ -143,7 +158,7 @@ class AnalyzeSuccess(BaseModel):
 
 class CompareRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_ids: list[int] = Field(min_length=2, max_length=3, examples=[[1, 2]])
+    item_ids: list[DbId] = Field(min_length=2, max_length=3, examples=[[1, 2]])
 
 
 class CompareData(BaseModel):
@@ -167,7 +182,7 @@ class CompareSuccess(BaseModel):
 
 class ChecklistRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
 
 
 ChecklistGroupKey = Literal["BEFORE_TRADE", "ON_SITE", "BEFORE_PAYMENT"]
@@ -202,7 +217,7 @@ class ChecklistSuccess(BaseModel):
 
 class InquiryScriptRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
 
 
 InquiryCategory = Literal["CONDITION", "COMPONENTS", "AUTHENTICITY", "TRADE"]
@@ -273,7 +288,7 @@ TradeMethodEnum = Literal["IN_PERSON", "DELIVERY"]
 
 class TransactionRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
     stage: TransactionStageEnum = Field(examples=["CONTACTING"])
     decision: TransactionDecisionEnum | None = Field(default=None, examples=["CONSIDERING"])
     # ↓ 거래 준비 정보 (문서 15). stage/decision 과 마찬가지로 생략하면 NULL 로 리셋된다
@@ -282,6 +297,27 @@ class TransactionRequest(BaseModel):
     trade_method: TradeMethodEnum | None = None
     memo: str | None = Field(default=None, max_length=2000, description="개인 메모")
     payment_method: str | None = Field(default=None, max_length=50, examples=["현금"])
+
+    @field_validator("meeting_at")
+    @classmethod
+    def _meeting_at_must_be_utc_representable(cls, v: datetime | None) -> datetime | None:
+        """UTC 로 환산할 수 없는 극단값을 422 로 거른다.
+
+        datetime 이 표현할 수 있는 범위는 서기 1년~9999년이다. '0001-01-01T00:00:00+14:00'
+        처럼 경계에 붙은 값에 오프셋을 적용하면 그 범위를 넘어서면서
+        OverflowError("date value out of range") 가 난다. Pydantic 자체 검증은 통과하는
+        값이라 422 로 안 걸리고, 저장/조회 경로에서 터져 500 이 됐다.
+        여기서 미리 한 번 환산해 보고, 실패하면 형식 오류로 돌려준다.
+        """
+        if v is None or v.tzinfo is None:
+            return v
+        try:
+            v.astimezone(timezone.utc)
+        except (OverflowError, OSError, ValueError) as e:
+            raise ValueError(
+                "UTC 로 변환할 수 없는 날짜입니다 (표현 가능 범위를 벗어남)"
+            ) from e
+        return v
 
 
 class TransactionPlan(BaseModel):
@@ -332,7 +368,7 @@ class TransactionListSuccess(BaseModel):
 
 class ComparisonAddRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
 
 
 class ComparisonAddData(BaseModel):
@@ -378,7 +414,7 @@ class ComparisonListSuccess(BaseModel):
 
 class BookmarkRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
 
 
 class BookmarkData(BaseModel):
@@ -424,7 +460,7 @@ class BookmarkListSuccess(BaseModel):
 
 class ListingRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
     title: str = Field(examples=["아이폰 13 프로 256GB"])
     price: int = Field(examples=[850000])
     model_name: str = Field(examples=["iPhone 13 Pro"])
@@ -543,7 +579,7 @@ class AnalysisDeleteSuccess(BaseModel):
 
 class PriceProposalRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
 
 
 class NegotiationRange(BaseModel):
@@ -580,7 +616,7 @@ class ComparisonSnapshotItem(BaseModel):
 
 class ComparisonHistoryRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_ids: list[int] = Field(min_length=2, max_length=3, examples=[[1, 2]])
+    item_ids: list[DbId] = Field(min_length=2, max_length=3, examples=[[1, 2]])
 
 
 class ComparisonHistoryData(BaseModel):
@@ -676,7 +712,7 @@ class MigrateGuestSuccess(BaseModel):
 
 class ChecklistStateRequest(BaseModel):
     user_id: str = Field(examples=["demo-user-1"])
-    item_id: int = Field(examples=[1])
+    item_id: DbId = Field(examples=[1])
     checked_item_ids: list[str] = Field(default_factory=list, examples=[["on_site-1"]])
     excluded_item_ids: list[str] = Field(default_factory=list)
 

@@ -16,6 +16,7 @@ load_dotenv()  # ai_report 등이 읽는 UPSTAGE_API_KEY 를 backend/.env 에서
 
 import logging
 import os
+from datetime import timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -34,6 +35,8 @@ from app import (
     scraper,
 )
 from app.schemas import (
+    INT64_MAX,
+    INT64_MIN,
     AnalysisDeleteSuccess,
     AnalysisDetailSuccess,
     AnalyzeRequest,
@@ -57,6 +60,7 @@ from app.schemas import (
     ComparisonHistorySuccess,
     ComparisonListSuccess,
     ComparisonRemoveSuccess,
+    DbId,
     ErrorBody,
     ErrorResponse,
     HistorySuccess,
@@ -103,8 +107,12 @@ async def enforce_auth(request: Request):
         request.state.auth_user_id = token_uid
         # 요청이 주장하는 user_id 와 토큰 신원 대조 — 다르면 남의 데이터 접근 시도
         claimed = request.query_params.get("user_id")
-        if claimed is None and request.method in ("POST", "PUT", "PATCH") and \
-                request.headers.get("content-type", "").startswith("application/json"):
+        # content-type 으로 본문 파싱 여부를 고르지 않는다 — 여기서 쓰던
+        # startswith("application/json") 은 대소문자·앞공백·"+json" 서브타입을 놓치는데,
+        # FastAPI 의 본문 파서는 그걸 전부 받아준다. 그 틈에서 신원 대조만 건너뛰어
+        # "Content-Type: application/JSON" 한 글자로 남의 user_id 로 쓰기가 통했다.
+        # 그냥 항상 파싱을 시도하고, JSON 이 아니면 아래 except 가 받아낸다.
+        if claimed is None and request.method in ("POST", "PUT", "PATCH"):
             try:
                 body = await request.json()  # Starlette이 body를 캐시하므로 엔드포인트 파싱과 충돌 없음
                 claimed = body.get("user_id") if isinstance(body, dict) else None
@@ -147,6 +155,10 @@ async def error_envelope_middleware(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception:
+        # 삼킨 예외는 반드시 남긴다 — 이 로그가 없어서 500 이 나도 콘솔에 traceback 조차
+        # 안 찍혔고, 원인을 아무도 찾지 못했다. 사용자에게 나가는 본문은 그대로 유지
+        # (내부 오류 상세를 클라이언트로 흘리지 않는다).
+        logger.exception("처리되지 않은 예외: %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={
@@ -202,6 +214,8 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.exception_handler(Exception)
 async def internal_error_handler(request: Request, exc: Exception):
+    # 미들웨어 바깥(CORS 등)에서 터진 예외가 오는 마지막 그물 — 여기서도 조용히 삼키지 않는다
+    logger.exception("처리되지 않은 예외(핸들러): %s %s", request.method, request.url.path)
     return error(500, "INTERNAL_ERROR", "서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
 
 
@@ -437,7 +451,16 @@ def set_transaction(req: TransactionRequest):
     plan = req.model_dump(
         include={"meeting_at", "meeting_place", "trade_method", "memo", "payment_method"}
     )
-    plan["meeting_at"] = req.meeting_at.isoformat(sep=" ") if req.meeting_at else None
+    # meeting_at 은 항상 "타임존 없는 UTC" 문자열로 넘긴다.
+    # tz-aware 값을 그냥 isoformat 하면 "2026-08-05 15:00:00+09:00" 처럼 오프셋이 붙은
+    # 문자열이 저장되고, 조회 때 뒤에 'Z' 가 덧붙어 "...+09:00Z" 라는 깨진 값이 된다.
+    # naive 입력은 지금까지처럼 UTC 로 간주 (기존 동작 유지).
+    # 환산이 표현 범위를 넘는 극단값(0001-01-01+14:00 등)은 TransactionRequest 의
+    # 검증기가 이미 422 로 거른 뒤라, 여기서 OverflowError 가 날 수 없다.
+    meeting_at = req.meeting_at
+    if meeting_at is not None and meeting_at.tzinfo is not None:
+        meeting_at = meeting_at.astimezone(timezone.utc).replace(tzinfo=None)
+    plan["meeting_at"] = meeting_at.isoformat(sep=" ") if meeting_at is not None else None
     updated_at = db.upsert_transaction_status(
         req.user_id, req.item_id, req.stage, req.decision, plan
     )
@@ -445,6 +468,14 @@ def set_transaction(req: TransactionRequest):
         {
             **req.model_dump(exclude={"user_id", "item_id"}),
             "item_id": req.item_id,
+            # 저장된 값과 응답이 어긋나지 않도록 정규화한 UTC 값으로 덮어쓴다
+            # (같은 시각, 표기만 UTC 통일 — 조회 API 결과와 일치시키기 위함).
+            # tzinfo 를 다시 붙이는 이유: naive 로 내보내면 "2026-08-05T06:00:00" 이 되는데
+            # JS `new Date()` 는 오프셋 없는 값을 '로컬 시각'으로 읽는다. 조회 API 는 '...Z'(UTC)
+            # 를 주므로 같은 행이 저장 직후엔 06:00, 다시 조회하면 15:00(KST)로 보인다.
+            "meeting_at": (
+                meeting_at.replace(tzinfo=timezone.utc) if meeting_at is not None else None
+            ),
             "updated_at": updated_at,
         }
     )
@@ -487,7 +518,9 @@ def add_comparison(req: ComparisonAddRequest):
 )
 def remove_comparison(
     user_id: str = Query(examples=["demo-user-1"]),
-    item_id: int = Query(examples=[1]),
+    # ge/le 를 Query 에 직접 준다 — Query 가 DbId(Annotated) 의 Field 메타데이터를
+    # 덮어써서, 타입만 DbId 로 바꿔서는 범위 제한이 적용되지 않는다 (schemas.DbId 주석 참고).
+    item_id: int = Query(examples=[1], ge=INT64_MIN, le=INT64_MAX),
 ):
     removed = db.remove_comparison_item(user_id, item_id)
     return success({"item_id": item_id, "removed": removed})
@@ -526,7 +559,9 @@ def add_bookmark(req: BookmarkRequest):
 )
 def remove_bookmark(
     user_id: str = Query(examples=["demo-user-1"]),
-    item_id: int = Query(examples=[1]),
+    # ge/le 를 Query 에 직접 준다 — Query 가 DbId(Annotated) 의 Field 메타데이터를
+    # 덮어써서, 타입만 DbId 로 바꿔서는 범위 제한이 적용되지 않는다 (schemas.DbId 주석 참고).
+    item_id: int = Query(examples=[1], ge=INT64_MIN, le=INT64_MAX),
 ):
     removed = db.unbookmark(user_id, item_id)
     return success({"item_id": item_id, "removed": removed})
@@ -578,7 +613,9 @@ def upsert_listing(req: ListingRequest):
 )
 def get_listing(
     user_id: str = Query(examples=["demo-user-1"]),
-    item_id: int = Query(examples=[1]),
+    # ge/le 를 Query 에 직접 준다 — Query 가 DbId(Annotated) 의 Field 메타데이터를
+    # 덮어써서, 타입만 DbId 로 바꿔서는 범위 제한이 적용되지 않는다 (schemas.DbId 주석 참고).
+    item_id: int = Query(examples=[1], ge=INT64_MIN, le=INT64_MAX),
 ):
     if not db.user_owns_analysis(user_id, item_id):  # 소유권 검증
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
@@ -625,7 +662,7 @@ def price_proposal(req: PriceProposalRequest):
     summary="분석 단건 상세 조회 (소유권 검증 — 본인 것만)",
 )
 def analysis_detail(
-    item_id: int,
+    item_id: DbId,
     user_id: str = Query(examples=["demo-user-1"]),
 ):
     detail = db.get_analysis_full(user_id, item_id)
@@ -643,7 +680,7 @@ def analysis_detail(
     summary="분석 기록 삭제 (soft delete — 찜/비교/거래 목록에서도 함께 사라짐)",
 )
 def analysis_delete(
-    item_id: int,
+    item_id: DbId,
     user_id: str = Query(examples=["demo-user-1"]),
 ):
     deleted = db.delete_analysis(user_id, item_id)
@@ -686,7 +723,7 @@ def list_comparison_history(user_id: str = Query(examples=["demo-user-1"])):
     summary="비교 기록 단건 조회 (본인 것만)",
 )
 def get_comparison_history(
-    comparison_id: int,
+    comparison_id: DbId,
     user_id: str = Query(examples=["demo-user-1"]),
 ):
     record = db.get_comparison_history(user_id, comparison_id)
@@ -703,7 +740,7 @@ def get_comparison_history(
     summary="비교 기록 삭제 (본인 것만)",
 )
 def delete_comparison_history(
-    comparison_id: int,
+    comparison_id: DbId,
     user_id: str = Query(examples=["demo-user-1"]),
 ):
     deleted = db.delete_comparison_history(user_id, comparison_id)
@@ -744,7 +781,9 @@ def put_checklist_state(req: ChecklistStateRequest):
 )
 def get_checklist_state(
     user_id: str = Query(examples=["demo-user-1"]),
-    item_id: int = Query(examples=[1]),
+    # ge/le 를 Query 에 직접 준다 — Query 가 DbId(Annotated) 의 Field 메타데이터를
+    # 덮어써서, 타입만 DbId 로 바꿔서는 범위 제한이 적용되지 않는다 (schemas.DbId 주석 참고).
+    item_id: int = Query(examples=[1], ge=INT64_MIN, le=INT64_MAX),
 ):
     if not db.user_owns_analysis(user_id, item_id):
         return error(404, "ITEM_NOT_FOUND", f"분석 내역에 없는 item_id: {item_id}")
