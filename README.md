@@ -16,7 +16,7 @@ AI Builder Sprint 2026 (주최: 부산대학교 APPTIVE / 후원: Upstage, 부�
 | 웹 (설치 없이 바로 확인) | https://baton-ai.vercel.app |
 | 백엔드 API | https://baton-exc8.onrender.com (`/health`, `/docs`) |
 
-iOS는 별도 빌드를 배포하지 않았습니다. 같은 코드베이스로 동작하며 `npm run ios`로 시뮬레이터에서 확인하실 수 있습니다.
+iOS는 배포에 Apple Developer Program 계정이 필요해 이번 예선에서는 빌드를 올리지 않았습니다. 같은 코드베이스로 동작하며 `npm run ios`로 시뮬레이터에서 확인하실 수 있습니다.
 
 백엔드가 Render 무료 티어라 한동안 요청이 없으면 잠들어 있습니다. 첫 요청은 30초 정도 걸릴 수 있습니다. SQLite 파일 DB를 쓰기 때문에 서버가 재시작되면 계정과 기록이 초기화될 수 있습니다. 로그인이 안 되면 회원가입부터 다시 하시면 됩니다.
 
