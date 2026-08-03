@@ -496,7 +496,7 @@ function ProductCaption({ title = '상품 정보 확인 필요' }: { title?: str
   );
 }
 
-function PriceComparisonBubble({ difference }: { difference: string }) {
+function PriceComparisonBubble({ comparisonText }: { comparisonText: string }) {
   const [multiline, setMultiline] = useState(false);
 
   return (
@@ -510,29 +510,42 @@ function PriceComparisonBubble({ difference }: { difference: string }) {
             }
           }}
           style={[styles.priceBubbleText, multiline && styles.priceBubbleTextMultiline]}>
-          <Text style={styles.priceBubbleMuted}>판매가보다 </Text>
-          {difference}
-          <Text style={styles.priceBubbleMuted}> 낮아요!</Text>
+          {comparisonText}
         </Text>
       </View>
     </View>
   );
 }
 
-function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | undefined) {
-  const target = proposal?.target_price ?? result.marketPrice.average;
-  const difference = Math.abs(result.listing.price - target);
-  const reasons = [...(proposal?.reasons.length ? proposal.reasons : ['AI 가격 제안 근거는 지원 예정인 기능입니다.'])];
+function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | null | undefined) {
+  const target = proposal?.target_price;
+  const alreadyFair = target == null && Boolean(proposal?.message);
+  const requestFailed = proposal === null;
+  const reasons = [...(proposal?.reasons.length
+    ? proposal.reasons
+    : [requestFailed ? '가격 제안 정보를 불러오지 못했습니다.' : 'AI 가격 제안 근거는 지원 예정인 기능입니다.'])];
   const range = proposal?.negotiation_range;
   if (range) {
     reasons.push(`협상 가능 범위: ${range.min.toLocaleString('ko-KR')}원 ~ ${range.max.toLocaleString('ko-KR')}원`);
   }
+  const difference = target == null ? null : Math.max(0, result.listing.price - target);
   return {
-    targetPrice: proposal?.target_price != null ? proposal.target_price.toLocaleString('ko-KR') : '지원 예정',
+    targetPrice: target != null
+      ? target.toLocaleString('ko-KR')
+      : alreadyFair
+        ? result.listing.price.toLocaleString('ko-KR')
+        : '지원 예정',
     listedPrice: result.listing.price.toLocaleString('ko-KR'),
-    difference: `약 ${difference.toLocaleString('ko-KR')}원`,
+    comparisonText: difference != null
+      ? `판매가보다 약 ${difference.toLocaleString('ko-KR')}원 낮아요!`
+      : alreadyFair
+        ? '현재 판매가가 이미 합리적이에요!'
+        : requestFailed
+          ? '가격 비교 정보를 불러오지 못했어요.'
+          : '가격 비교는 지원 예정이에요.',
     reasons,
-    message: proposal?.message ?? '가격 제안 메시지는 지원 예정인 기능입니다.',
+    message: proposal?.message
+      ?? (requestFailed ? '가격 제안 메시지를 불러오지 못했습니다.' : '가격 제안 메시지는 지원 예정인 기능입니다.'),
   };
 }
 
@@ -542,7 +555,7 @@ function PriceStepContent({
   onCopyMessage,
 }: {
   result: AnalysisResult;
-  proposal: PriceProposalData | undefined;
+  proposal: PriceProposalData | null | undefined;
   onCopyMessage: () => void;
 }) {
   const view = buildPriceProposalView(result, proposal);
@@ -577,7 +590,7 @@ function PriceStepContent({
             />
           </View>
 
-          <PriceComparisonBubble difference={view.difference} />
+          <PriceComparisonBubble comparisonText={view.comparisonText} />
         </View>
 
         <View style={styles.priceReasonSection}>
@@ -943,7 +956,7 @@ export default function TradePreparationScreen() {
   const [serverMessage, setServerMessage] = useState('');
   const [serverQuestions, setServerQuestions] = useState<TradeQuestion[]>([]);
   const [serverChecklist, setServerChecklist] = useState<TradeChecklistItem[]>([]);
-  const [priceProposal, setPriceProposal] = useState<PriceProposalData>();
+  const [priceProposal, setPriceProposal] = useState<PriceProposalData | null>();
   const [transactionStage, setTransactionStage] = useState<ApiTransactionStage | null>(null);
   const [transactionDecision, setTransactionDecision] = useState<ApiTransactionDecision | null>(null);
   const [meetingAt, setMeetingAt] = useState<string | null>(null);
@@ -1002,7 +1015,7 @@ export default function TradePreparationScreen() {
             setMemo(transaction?.memo ?? '');
             setPaymentMethod(transaction?.payment_method ?? '');
           }
-          if (priceProposalResult.status === 'fulfilled') setPriceProposal(priceProposalResult.value);
+          setPriceProposal(priceProposalResult.status === 'fulfilled' ? priceProposalResult.value : null);
         }
       })
       .finally(() => {
