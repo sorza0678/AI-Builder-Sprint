@@ -29,16 +29,27 @@ _SCHEMA = {
             "defects_found": {"type": "array", "items": {"type": "string"}},
             "missing_components": {"type": "array", "items": {"type": "string"}},
             "scam_warnings": {"type": "array", "items": {"type": "string"}},
+            "model_name": {"type": ["string", "null"]},
+            "year": {"type": ["string", "null"]},
+            "size_or_capacity": {"type": ["string", "null"]},
+            "color": {"type": ["string", "null"]},
+            "usage_period": {"type": ["string", "null"]},
         },
-        "required": ["defects_found", "missing_components", "scam_warnings"],
+        "required": [
+            "defects_found", "missing_components", "scam_warnings",
+            "model_name", "year", "size_or_capacity", "color", "usage_period",
+        ],
         "additionalProperties": False,
     },
 }
 
 _SYSTEM = (
-    "너는 중고거래 매물 분석 전문가다. 매물 제목과 설명만 보고 "
-    "(1) 언급된 하자/결함, (2) 빠진 구성품, (3) 사기 의심 신호를 한국어로 추출한다. "
-    "본문에 없는 내용을 지어내지 마라. 각 항목은 25자 이내의 짧은 구절로."
+    "너는 중고거래 매물 분석 전문가다. 매물 제목과 설명만 보고 다음을 한국어로 추출한다: "
+    "(1) 언급된 하자/결함, (2) 빠진 구성품, (3) 사기 의심 신호, "
+    "(4) 모델명(예: iPhone 14 Pro, 갤럭시 Z플립6), (5) 연식 또는 출시년도, "
+    "(6) 용량 또는 사이즈(예: 256GB, 260mm), (7) 색상, (8) 사용 기간(예: 6개월, 1년). "
+    "본문에 없는 내용을 지어내지 마라 — (4)~(8)은 본문에 명시적으로 없으면 반드시 null. "
+    "(1)~(3)의 각 항목은 25자 이내의 짧은 구절로."
 )
 
 
@@ -70,10 +81,22 @@ def get_ai_report(listing: dict) -> dict | None:
         report = json.loads(r.json()["choices"][0]["message"]["content"])
         if not isinstance(report, dict):
             return None
+
+        def _short_text(key: str) -> str | None:
+            value = report.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            return value.strip()[:30]
+
         return {
             "defects_found": [str(x) for x in report.get("defects_found", [])][:5],
             "missing_components": [str(x) for x in report.get("missing_components", [])][:5],
             "scam_warnings": [str(x) for x in report.get("scam_warnings", [])][:5],
+            "model_name": _short_text("model_name"),
+            "year": _short_text("year"),
+            "size_or_capacity": _short_text("size_or_capacity"),
+            "color": _short_text("color"),
+            "usage_period": _short_text("usage_period"),
         }
     except Exception as e:
         # Solar 실패는 치명적이지 않다(Rule Engine 결과는 그대로) — 다만 키를 넣었는데
@@ -103,4 +126,9 @@ def merge_report(rule_result: dict, ai: dict | None) -> dict:
             )
         ),
     }
+    merged["model_name"] = ai.get("model_name")
+    merged["year"] = ai.get("year")
+    merged["size_or_capacity"] = ai.get("size_or_capacity")
+    merged["color"] = ai.get("color")
+    merged["usage_period"] = ai.get("usage_period")
     return merged

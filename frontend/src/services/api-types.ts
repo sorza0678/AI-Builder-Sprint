@@ -37,6 +37,11 @@ export interface AnalyzeData {
   location?: string | null;
   seller_description?: string | null;
   trade_method?: ApiListingTradeMethod | null;
+  model_name?: string | null;
+  year?: string | null;
+  size_or_capacity?: string | null;
+  color?: string | null;
+  usage_period?: string | null;
   source_url?: string;
   bookmarked_at?: string;
   comparison_added_at?: string;

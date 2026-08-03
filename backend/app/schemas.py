@@ -125,6 +125,12 @@ class AnalyzeData(BaseModel):
     trade_method: Literal["IN_PERSON", "DELIVERY", "BOTH"] | None = None
     seller_description: str | None = Field(default=None, description="판매자가 쓴 원문 설명")
     seller_profile_url: str | None = None
+    # ↓ 2026-08-03 추가 — Solar가 제목·설명에서 추출 (additive, 명시 안 됐으면 null, 지어내지 않음)
+    model_name: str | None = None
+    year: str | None = None
+    size_or_capacity: str | None = None
+    color: str | None = None
+    usage_period: str | None = None
 
 
 class AnalyzeSuccess(BaseModel):
@@ -504,6 +510,11 @@ class AnalysisDetailData(BaseModel):
     trade_method: Literal["IN_PERSON", "DELIVERY", "BOTH"] | None = None
     seller_description: str | None = None
     seller_profile_url: str | None = None
+    model_name: str | None = None
+    year: str | None = None
+    size_or_capacity: str | None = None
+    color: str | None = None
+    usage_period: str | None = None
     listing_details: ListingData | None = Field(
         default=None, description="화면2에서 확인/수정한 상세 — 아직 없으면 null"
     )
