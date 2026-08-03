@@ -163,21 +163,34 @@ EXPO_PUBLIC_API_BASE_URL=https://baton-exc8.onrender.com/
 
 ## AI 활용
 
-개발 전 과정에 Claude Code를 사용했습니다. 에이전트 설정과 작업 지침 파일을 저장소에 포함하고 있습니다.
+파트별로 다른 코딩 에이전트를 썼습니다. 백엔드는 Claude Code, 프론트엔드는 Codex로 작업했고, 두 에이전트가 같은 저장소에서 서로의 영역을 침범하지 않도록 지침 파일로 경계를 정해뒀습니다.
 
-| 파일 | 내용 |
-| --- | --- |
-| [backend/AGENTS.md](backend/AGENTS.md), [backend/CLAUDE.md](backend/CLAUDE.md) | 백엔드 작업 지침, API 설계 결정과 발견한 이슈 기록 |
-| [backend/.claude/agents/plan.md](backend/.claude/agents/plan.md) | 엔드포인트·스키마 변경 전 설계를 먼저 검토하는 서브에이전트 |
-| [backend/.claude/skills/team-conventions](backend/.claude/skills/team-conventions/SKILL.md) | 응답 형식, 에러 처리, 커밋 규칙을 팀과 에이전트가 같이 따르도록 정리한 스킬 |
-| [frontend/AGENTS.md](frontend/AGENTS.md), [frontend/CLAUDE.md](frontend/CLAUDE.md) | 프론트엔드 작업 지침. Figma 반영 규칙, API 계약 준수, Mock 데이터 경계 |
+| 파일 | 대상 | 내용 |
+| --- | --- | --- |
+| [backend/AGENTS.md](backend/AGENTS.md) | 공통 | 백엔드 작업 지침, API 설계 결정과 발견한 이슈 기록 |
+| [backend/CLAUDE.md](backend/CLAUDE.md) | Claude Code | 백엔드 전용 지침. plan 에이전트와 스킬을 언제 쓸지 |
+| [backend/.claude/agents/plan.md](backend/.claude/agents/plan.md) | Claude Code | 엔드포인트·스키마 변경 전 설계를 먼저 검토하는 서브에이전트 |
+| [backend/.claude/skills/team-conventions](backend/.claude/skills/team-conventions/SKILL.md) | Claude Code | 응답 형식, 에러 처리, 커밋 규칙을 정리한 스킬 |
+| [frontend/AGENTS.md](frontend/AGENTS.md) | Codex | 프론트엔드 작업 지침. Expo 버전 문서 확인, Figma 반영 규칙, API 계약 준수, Mock 데이터 경계 |
+| [frontend/CLAUDE.md](frontend/CLAUDE.md) | Claude Code | 프론트 확인 작업 시 AGENTS.md를 그대로 따르도록 연결 |
+| [frontend/.claude/settings.json](frontend/.claude/settings.json) | Claude Code | Expo 플러그인 설정 |
 
-주로 이런 작업에 활용했습니다.
+### 스킬과 서브에이전트를 쓴 이유
 
-- API 응답 확장. 기존 필드는 그대로 두고 새 필드만 추가하는 방식으로 프론트와의 계약을 깨지 않게 했습니다
+**team-conventions 스킬** — 백엔드를 두 명이 나눠 맡다 보니 응답 형식이 엇갈리는 일이 잦았습니다. 공통 응답 형식 `{ ok, data, error }`, 에러 코드 구분(4xx/5xx), 커밋 메시지 규칙, 담당 범위를 스킬로 만들어두니 에이전트가 새 엔드포인트를 만들 때마다 같은 규칙을 따랐습니다. 사람이 매번 "응답 형식 맞춰줘"라고 말할 필요가 없어졌습니다.
+
+**plan 서브에이전트** — "이거 만들어줘"라고 하면 바로 코드부터 쓰는 게 문제였습니다. 특히 프론트가 이미 쓰고 있는 API 스키마를 건드리면 화면이 깨집니다. 그래서 새 엔드포인트나 스키마 변경 요청이 오면 코드를 못 쓰게 하고(도구를 읽기 전용으로 제한) 설계안만 먼저 내놓게 했습니다. 사람이 승인한 뒤에 구현으로 넘어갑니다.
+
+**AGENTS.md로 영역 분리** — 프론트 지침에 `backend/**`는 읽기 전용이라고 못박아서, Codex가 백엔드 오류를 발견해도 직접 고치지 않고 보고만 하도록 했습니다. 반대로 백엔드 작업 중에는 프론트를 건드리지 않습니다. 계약 불일치는 사람이 판단해서 어느 쪽을 고칠지 정했습니다.
+
+**추측 금지 규칙** — 양쪽 지침에 "서버가 주지 않는 값을 임의로 만들지 않는다"를 넣었습니다. 그 결과 매물 수집에 실패하면 그럴듯한 가짜 데이터로 채우지 않고 `SCRAPE_FAILED`를 그대로 반환합니다. 마이페이지의 추천 영역도 실데이터가 없어서 만들지 않았습니다.
+
+### 이런 작업에 활용했습니다
+
+- API 응답 확장. 기존 필드는 그대로 두고 새 필드만 추가해서 프론트와의 계약을 깨지 않게 했습니다
 - 보안 점검. 취약점을 실제로 재현한 뒤 수정했습니다 (남의 매물 데이터 참조, `/analyze`를 통한 내부망 접근, Content-Type 대소문자를 이용한 인증 우회)
 - 시세 정확도 개선. 분석 대상 매물이 자기 시세 표본에 섞이는 문제, 다른 세대 모델 혼입, 키워드를 잔뜩 넣은 낚시 매물 필터링
-- 버그 원인 규명부터 회귀 테스트 작성, 배포 서버 실측 확인까지
+- 버그 원인 규명부터 회귀 테스트 작성, 배포 서버 실측 확인까지. 백엔드 테스트 329개는 대부분 이 과정에서 만들어졌습니다
 
 ## 저장소 구조
 
@@ -188,4 +201,4 @@ backend/    FastAPI 서버. API, DB, 규칙 엔진, Upstage 연동
 frontend/   Expo 앱. Android / iOS / Web 공통 코드
 ```
 
-Backend A(분석 파이프라인)와 Backend B(서비스·DB)가 같은 FastAPI 앱 안에서 파일과 엔드포인트 단위로 나눠 작업했습니다. 응답 형식과 에러 코드, 커밋 규칙은 [team-conventions](backend/.claude/skills/team-conventions/SKILL.md)에 정리해두고 팀 전체가 따랐습니다.
+Backend A(분석 파이프라인)와 Backend B(서비스·DB)가 같은 FastAPI 앱 안에서 파일과 엔드포인트 단위로 나눠 작업했습니다. 프론트엔드는 백엔드 API 계약이 확정된 부분만 연결하고, 없는 기능은 추측해서 만들지 않았습니다.
