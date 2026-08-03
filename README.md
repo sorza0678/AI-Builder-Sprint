@@ -1,22 +1,28 @@
 # 바톤 (Baton)
 
-중고거래 매물 링크를 넣으면 시세가 적정한지, 사기 위험은 없는지, 물건 상태는 어떤지를 대신 확인해주는 서비스입니다. 분석 결과를 바탕으로 현장 확인 체크리스트와 판매자 문의 문구까지 만들어줍니다.
+중고거래 매물 링크를 넣으면 시세가 적정한지, 사기 위험은 없는지, 물건 상태는 어떤지를 대신 확인해주는 모바일 앱입니다. 분석 결과를 바탕으로 현장 확인 체크리스트와 판매자 문의 문구까지 만들어줍니다.
+
+중고 거래는 대부분 휴대폰으로 매물을 보다가 그 자리에서 판단하게 됩니다. 그래서 앱을 기준으로 만들었고, Android와 iOS, 웹을 하나의 코드베이스(Expo / React Native)로 함께 지원합니다. 중고 앱에서 "공유하기"로 복사한 문구를 그대로 붙여넣으면 그 안에서 매물 링크만 뽑아내고, 거래 일시는 각 플랫폼의 기본 날짜 선택기를 씁니다.
 
 AI Builder Sprint 2026 (주최: 부산대학교 APPTIVE / 후원: Upstage, 부산대 Anchor 사업단, 부산대 AI융합교육원) 예선 제출 저장소입니다.
 
 ## 배포 주소
 
+앱이 기준이지만, 설치 없이 확인하실 수 있도록 웹도 함께 배포했습니다. 두 곳 모두 같은 백엔드를 쓰고 기능도 동일합니다.
+
 | 구분 | 주소 |
 | --- | --- |
-| 웹 | https://baton-ai.vercel.app |
+| Android 앱 (APK) | https://expo.dev/accounts/yj0602/projects/baton/builds/6baecfec-c12f-44fa-bb3f-af4ff5cdf68f |
+| 웹 (설치 없이 바로 확인) | https://baton-ai.vercel.app |
 | 백엔드 API | https://baton-exc8.onrender.com (`/health`, `/docs`) |
-| Android APK | https://expo.dev/accounts/yj0602/projects/baton/builds/6baecfec-c12f-44fa-bb3f-af4ff5cdf68f |
+
+iOS는 별도 빌드를 배포하지 않았습니다. 같은 코드베이스로 동작하며 `npm run ios`로 시뮬레이터에서 확인하실 수 있습니다.
 
 백엔드가 Render 무료 티어라 한동안 요청이 없으면 잠들어 있습니다. 첫 요청은 30초 정도 걸릴 수 있습니다. SQLite 파일 DB를 쓰기 때문에 서버가 재시작되면 계정과 기록이 초기화될 수 있습니다. 로그인이 안 되면 회원가입부터 다시 하시면 됩니다.
 
 ## 사용해보기
 
-웹에서는 첫 화면의 "로그인 없이 둘러보기"로 회원가입 없이 바로 쓸 수 있습니다.
+앱과 웹 모두 첫 화면의 "로그인 없이 둘러보기"로 회원가입 없이 바로 쓸 수 있습니다.
 
 1. 홈 화면 입력창에 중고 매물 URL을 붙여넣고 분석
 2. 추출된 상품 정보 확인·수정
@@ -61,10 +67,21 @@ AI Builder Sprint 2026 (주최: 부산대학교 APPTIVE / 후원: Upstage, 부�
 
 | 영역 | 스택 |
 | --- | --- |
+| 앱 | Expo (React Native 0.81, SDK 54), Expo Router, TypeScript |
+| 웹 | React Native Web. 앱과 같은 코드베이스에서 빌드 |
 | 백엔드 | FastAPI, SQLite / PostgreSQL(Supabase) 이중 지원, Upstage Solar |
-| 프론트엔드 | Expo (React Native 0.81, SDK 54), Expo Router, TypeScript, React Native Web |
-| 배포 | 백엔드 Render, 웹 Vercel, 안드로이드 Expo 빌드 |
+| 배포 | 앱 Expo 빌드(APK), 웹 Vercel, 백엔드 Render |
 | 인증 | PBKDF2 비밀번호 해시 + HMAC 서명 토큰 (외부 인증 서비스 없이 직접 구현) |
+
+화면은 React Native 컴포넌트와 `StyleSheet`로만 구성했고 웹 전용 HTML/CSS 화면을 따로 두지 않았습니다. 플랫폼마다 입력 방식이 달라야 하는 부분만 `Platform.OS`로 나눕니다.
+
+| | 앱 (Android / iOS) | 웹 |
+| --- | --- | --- |
+| 거래 일시 입력 | OS 기본 날짜·시간 선택기 | 브라우저 날짜·시간 입력 |
+| 링크 붙여넣기 | 클립보드 버튼. 공유 문구에서 URL만 추출 | 동일 |
+| 로그인 세션·게스트 기록 | 기기 저장소 | 브라우저 저장소 |
+
+어느 쪽이든 서버에 보내는 거래 일시는 같은 ISO 형식으로 맞춰서, 앱에서 만든 기록을 웹에서 그대로 볼 수 있습니다.
 
 ## 로컬 실행
 
@@ -95,12 +112,20 @@ Windows는 `.venv/Scripts/pip`, `.venv/Scripts/python`을 씁니다.
 
 API 상세는 [backend/README.md](backend/README.md)에 있습니다.
 
-### 프론트엔드 (:8081)
+### 앱 / 웹 (:8081)
 
 ```bash
 cd frontend
 npm install
-npm start          # 또는 npm run web / npm run android / npm run ios
+npm start
+```
+
+`npm start` 후 터미널의 QR 코드를 Expo Go로 찍으면 실기기에서 바로 볼 수 있습니다. 플랫폼을 지정해 띄우려면 아래를 씁니다.
+
+```bash
+npm run android   # Android 에뮬레이터
+npm run ios       # iOS 시뮬레이터
+npm run web       # 브라우저
 ```
 
 화면 구성과 서비스 계층 구조는 [frontend/README.md](frontend/README.md)에 있습니다.
