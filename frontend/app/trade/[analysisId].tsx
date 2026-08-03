@@ -475,7 +475,7 @@ function PriceCard({
           {price}
         </Text>
       </View>
-      <NativeText numberOfLines={1} style={styles.priceWatermark}>
+      <NativeText style={styles.priceWatermark}>
         {watermark}
       </NativeText>
       <View style={[styles.priceCardImageFrame, imageFrameStyle]}>
@@ -634,6 +634,17 @@ function formatMeetingAt(value: string | null): string {
   });
 }
 
+function getWebDateTimeParts(value: string | null): { date: string; time: string } {
+  if (!value) return { date: '', time: '' };
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return { date: '', time: '' };
+  const pad = (part: number): string => String(part).padStart(2, '0');
+  return {
+    date: `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`,
+    time: `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`,
+  };
+}
+
 function MeetingDateTimeField({
   onChange,
   value,
@@ -642,14 +653,54 @@ function MeetingDateTimeField({
   value: string | null;
 }) {
   const [iosPickerVisible, setIosPickerVisible] = useState(false);
+  const initialWebParts = getWebDateTimeParts(value);
+  const [webDate, setWebDate] = useState(initialWebParts.date);
+  const [webTime, setWebTime] = useState(initialWebParts.time);
+
+  useEffect(() => {
+    const next = getWebDateTimeParts(value);
+    setWebDate(next.date);
+    setWebTime(next.time);
+  }, [value]);
+
+  const updateWebDateTime = (date: string, time: string): void => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return;
+    const parsed = new Date(`${date}T${time}:00`);
+    if (Number.isNaN(parsed.getTime())) return;
+    const normalized = getWebDateTimeParts(parsed.toISOString());
+    if (normalized.date === date && normalized.time === time) onChange(parsed.toISOString());
+  };
 
   if (Platform.OS === 'web') {
     return (
       <View style={styles.planFieldRow}>
         <Text style={styles.planFieldLabel}>거래 일시</Text>
-        <Text style={styles.planFieldWebNote}>
-          {value ? formatMeetingAt(value) : '웹에서는 아직 지원하지 않는 기능입니다.'}
-        </Text>
+        <View style={styles.planWebDateTimeRow}>
+          <TextInput
+            accessibilityLabel="거래 날짜"
+            maxLength={10}
+            onChangeText={(nextDate) => {
+              setWebDate(nextDate);
+              updateWebDateTime(nextDate, webTime);
+            }}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor="#B9BEC5"
+            style={[styles.planTextInput, styles.planWebDateInput]}
+            value={webDate}
+          />
+          <TextInput
+            accessibilityLabel="거래 시간"
+            maxLength={5}
+            onChangeText={(nextTime) => {
+              setWebTime(nextTime);
+              updateWebDateTime(webDate, nextTime);
+            }}
+            placeholder="HH:mm"
+            placeholderTextColor="#B9BEC5"
+            style={[styles.planTextInput, styles.planWebTimeInput]}
+            value={webTime}
+          />
+        </View>
       </View>
     );
   }
@@ -1685,7 +1736,9 @@ const styles = StyleSheet.create({
     gap: 56,
   },
   priceSummary: {
-    paddingHorizontal: 8,
+    width: '100%',
+    maxWidth: 312,
+    alignSelf: 'center',
     gap: 29,
   },
   priceCardsRow: {
@@ -2007,11 +2060,9 @@ const styles = StyleSheet.create({
     lineHeight: 18.9,
     letterSpacing: -0.3,
   },
-  planFieldWebNote: {
-    color: '#B9BEC5',
-    fontSize: 14,
-    lineHeight: 20,
-  },
+  planWebDateTimeRow: { flexDirection: 'row', gap: 8 },
+  planWebDateInput: { flex: 2, minWidth: 0 },
+  planWebTimeInput: { flex: 1, minWidth: 0 },
   planDateTrigger: {
     minHeight: 48,
     paddingHorizontal: 16,

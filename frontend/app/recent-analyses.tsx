@@ -14,6 +14,7 @@ import { getHistory } from '@/src/services/history-service';
 import { deleteAnalysis } from '@/src/services/analysis-service';
 import type { HistoryItem } from '@/src/services/api-types';
 import { SwipeToDelete } from '@/src/components/swipe-to-delete';
+import { ErrorState, LoadingState } from '@/src/components/common';
 
 interface AnalysisHistorySection {
   title: string;
@@ -108,9 +109,29 @@ export default function RecentAnalysesScreen() {
   const tradeSelectionMode = mode === 'trade';
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    getHistory(1, 50).then(({ items: historyItems }) => setItems(historyItems));
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
+    void getHistory(1, 50)
+      .then(({ items: historyItems }) => {
+        if (active) setItems(historyItems);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setLoadError(error instanceof Error ? error.message : '분석 기록을 불러오지 못했습니다.');
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useFocusEffect(load);
@@ -158,7 +179,13 @@ export default function RecentAnalysesScreen() {
       <SectionList
         contentContainerStyle={styles.content}
         keyExtractor={(item) => item.id}
-        ListEmptyComponent={<Text style={styles.emptyText}>{query ? '검색 결과가 없습니다.' : '최근 본 분석이 없습니다.'}</Text>}
+        ListEmptyComponent={
+          loading
+            ? <LoadingState />
+            : loadError
+              ? <ErrorState message={loadError} onRetry={load} />
+              : <Text style={styles.emptyText}>{query ? '검색 결과가 없습니다.' : '최근 본 분석이 없습니다.'}</Text>
+        }
         renderItem={({ item }) => {
           const row = <AnalysisHistoryRow destination={tradeSelectionMode ? 'trade' : 'analysis'} item={item} />;
           if (tradeSelectionMode) return row;

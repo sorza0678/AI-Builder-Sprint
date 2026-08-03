@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import {
+  Platform,
   Pressable,
   Modal,
   ScrollView,
@@ -158,6 +159,9 @@ export default function CompareScreen() {
           ? (apiItems[0]?.product_status.missing_components.length ? apiItems[0].product_status.missing_components : ['전체 구성품 비교는 지원 예정인 기능입니다.'])
           : apiItems[0] ? [`판매가 ${apiItems[0].price.toLocaleString('ko-KR')}원`, `평균 시세 ${apiItems[0].market_price_avg.toLocaleString('ko-KR')}원`] : [],
   };
+  const summaryTitle = Platform.OS === 'web' && !recommendation
+    ? '비교할 상품을 2개 이상\n추가해 주세요'
+    : content.title;
   const visibleItems = useMemo(
     () => comparisonItems.filter((item) => visibleIds.includes(item.id)),
     [comparisonItems, visibleIds],
@@ -238,7 +242,7 @@ export default function CompareScreen() {
               source={require('@/assets/images/compare/hero.svg')}
               style={styles.heroImage}
             />
-            <Text style={styles.summaryTitle}>{content.title}</Text>
+            <Text style={styles.summaryTitle}>{summaryTitle}</Text>
             <Text style={styles.summaryCaption}>핵심 비교 결과</Text>
             <View style={styles.bulletList}>
               {content.bullets.map((bullet) => (
