@@ -43,6 +43,24 @@ _SCHEMA = {
     },
 }
 
+# AI 가 채우는 부가 필드 — AI 성공/실패 두 경로가 항상 같은 키 집합을 반환해야
+# 호출부가 dict 를 직접 써도 KeyError 가 나지 않는다 (merge_report 참고).
+_AI_DETAIL_KEYS = ("model_name", "year", "size_or_capacity", "color", "usage_period")
+
+# 프롬프트가 "본문에 명시적으로 없으면 반드시 null" 이라고 지시해도 LLM 은 관성적으로
+# "없음"/"미상" 같은 문자열을 뱉는다. 이게 그대로 통과하면 프론트의 `?? ""` 폴백이
+# null 이 아니라서 작동하지 않고, 모델명 입력칸에 "없음" 이 자동 입력된다.
+# 비교는 반드시 완전일치 — 부분일치로 걸러내면 "무광 블랙", "미사용" 같은 진짜 값까지 날아간다.
+# (소문자화 + 공백 제거 후 비교하므로 "N/A", " 미상 ", "확인 불가" 도 같이 잡힌다)
+_PLACEHOLDER_TEXTS = frozenset(
+    {
+        "없음", "없습니다", "미상", "미기재", "미확인", "미제공",
+        "확인불가", "확인불가능", "확인안됨", "정보없음", "해당없음", "알수없음", "모름",
+        "n/a", "na", "null", "none", "nil", "unknown", "unspecified",
+        "-", "--", "_", ".", "?", "??",
+    }
+)
+
 _SYSTEM = (
     "너는 중고거래 매물 분석 전문가다. 매물 제목과 설명만 보고 다음을 한국어로 추출한다: "
     "(1) 언급된 하자/결함, (2) 빠진 구성품, (3) 사기 의심 신호, "
@@ -51,6 +69,19 @@ _SYSTEM = (
     "본문에 없는 내용을 지어내지 마라 — (4)~(8)은 본문에 명시적으로 없으면 반드시 null. "
     "(1)~(3)의 각 항목은 25자 이내의 짧은 구절로."
 )
+
+
+def _short_text(value) -> str | None:
+    """LLM 이 준 단문 필드를 정리 — 빈 값·자리표시 문자열은 None, 나머지는 30자로 자른다."""
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    # 대소문자·공백에 견고하게: "N/A", " 미상 ", "확인 불가" 를 모두 같은 형태로 눕혀 비교
+    if "".join(stripped.split()).lower() in _PLACEHOLDER_TEXTS:
+        return None
+    return stripped[:30]
 
 
 def get_ai_report(listing: dict) -> dict | None:
@@ -72,7 +103,12 @@ def get_ai_report(listing: dict) -> dict | None:
                     },
                 ],
                 "response_format": {"type": "json_schema", "json_schema": _SCHEMA},
-                "max_tokens": 500,
+                # 응답 필드가 3개 → 8개로 늘면서 최악 출력량이 500 토큰 코앞까지 왔다
+                # (배열 3개 × 5항목 × 25자 + 신규 5필드 + JSON 키/구두점 ≒ 415~490 토큰).
+                # 잘리면 JSON 이 중간에서 끊겨 json.loads 가 터지고 → None 반환 → merge_report 가
+                # early return 해서 신규 필드뿐 아니라 defects_found/scam_warnings 까지 통째로 날아간다.
+                # 여유를 둬서 "기능 추가가 기존 기능을 죽이는" 사고를 막는다.
+                "max_tokens": 800,
                 "temperature": 0,
             },
             timeout=TIMEOUT,
@@ -82,21 +118,11 @@ def get_ai_report(listing: dict) -> dict | None:
         if not isinstance(report, dict):
             return None
 
-        def _short_text(key: str) -> str | None:
-            value = report.get(key)
-            if not isinstance(value, str) or not value.strip():
-                return None
-            return value.strip()[:30]
-
         return {
             "defects_found": [str(x) for x in report.get("defects_found", [])][:5],
             "missing_components": [str(x) for x in report.get("missing_components", [])][:5],
             "scam_warnings": [str(x) for x in report.get("scam_warnings", [])][:5],
-            "model_name": _short_text("model_name"),
-            "year": _short_text("year"),
-            "size_or_capacity": _short_text("size_or_capacity"),
-            "color": _short_text("color"),
-            "usage_period": _short_text("usage_period"),
+            **{key: _short_text(report.get(key)) for key in _AI_DETAIL_KEYS},
         }
     except Exception as e:
         # Solar 실패는 치명적이지 않다(Rule Engine 결과는 그대로) — 다만 키를 넣었는데
@@ -108,7 +134,10 @@ def get_ai_report(listing: dict) -> dict | None:
 def merge_report(rule_result: dict, ai: dict | None) -> dict:
     """rule_engine 결과에 AI 리포트를 합집합 병합. 점수는 건드리지 않는다."""
     if not ai:
-        return rule_result
+        # AI 가 없어도 키 집합은 AI 있음 경로와 동일해야 한다(값만 null).
+        # 지금은 Pydantic 스키마 기본값이 None 이라 우연히 동작하지만,
+        # 호출부가 반환 dict 를 직접 읽으면 KeyError 가 난다.
+        return {**rule_result, **dict.fromkeys(_AI_DETAIL_KEYS)}
     merged = {**rule_result}
     merged["scam_warnings"] = list(
         dict.fromkeys(rule_result["scam_warnings"] + ai["scam_warnings"])
@@ -126,9 +155,6 @@ def merge_report(rule_result: dict, ai: dict | None) -> dict:
             )
         ),
     }
-    merged["model_name"] = ai.get("model_name")
-    merged["year"] = ai.get("year")
-    merged["size_or_capacity"] = ai.get("size_or_capacity")
-    merged["color"] = ai.get("color")
-    merged["usage_period"] = ai.get("usage_period")
+    for key in _AI_DETAIL_KEYS:
+        merged[key] = ai.get(key)
     return merged

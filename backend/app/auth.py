@@ -40,16 +40,34 @@ def hash_password(password: str) -> str:
     return f"pbkdf2${salt}${digest.hex()}"
 
 
+def _constant_time_equals(expected: str, provided: str) -> bool:
+    """타이밍 공격 방어(compare_digest)는 유지하면서, 어떤 입력이 와도 예외를 내지 않는 비교.
+
+    hmac.compare_digest 는 str 인자에 non-ASCII 문자가 하나라도 섞이면
+    TypeError("comparing strings with non-ASCII characters is not supported") 를 던진다.
+    우리가 비교하는 값(HMAC 서명·pbkdf2 해시)은 항상 ASCII hex 이므로,
+    non-ASCII 가 들어왔다는 건 곧 '틀린 값'이라는 뜻이다 → 조용히 False.
+    이 예외가 밖으로 새면 401 이어야 할 요청이 500 이 된다 (실제로 그랬다).
+    """
+    try:
+        return hmac.compare_digest(expected, provided)
+    except TypeError:
+        # non-ASCII 문자열, 또는 str/bytes 가 아닌 값(None 등)
+        return False
+
+
 def verify_password(password: str, stored: str) -> bool:
     try:
         _, salt, expected = stored.split("$")
+        # fromhex/encode 도 try 안에 둔다 — salt 가 hex 가 아닌 손상된 행이 있으면
+        # 여기서 ValueError 가 나고, 밖에 두면 로그인 요청이 401 대신 500 이 된다.
+        salt_bytes = bytes.fromhex(salt)
+        password_bytes = password.encode()
     except (ValueError, AttributeError):
         return False
-    digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), bytes.fromhex(salt), _PBKDF2_ITERATIONS
-    )
+    digest = hashlib.pbkdf2_hmac("sha256", password_bytes, salt_bytes, _PBKDF2_ITERATIONS)
     # compare_digest: 일반 == 는 앞글자부터 틀리면 빨리 끝나서 시간차로 유추 가능(타이밍 공격) — 이를 방지
-    return hmac.compare_digest(digest.hex(), expected)
+    return _constant_time_equals(digest.hex(), expected)
 
 
 def _sign(payload: str) -> str:
@@ -64,13 +82,21 @@ def create_token(user_id: str) -> tuple[str, int]:
 
 
 def verify_token(token: str) -> str | None:
-    """유효하면 user_id, 아니면 None (위조·만료·형식 오류 모두)."""
+    """유효하면 user_id, 아니면 None (위조·만료·형식 오류 모두).
+
+    어떤 형태의 토큰이 와도 예외를 밖으로 흘리지 않는 것이 이 함수의 계약이다 —
+    호출부(미들웨어)는 None 을 401 로 바꾸지만, 예외는 그대로 500 이 되기 때문이다.
+    그래서 서명 생성(_sign)과 비교까지 전부 방어 범위 안에 둔다.
+    """
     try:
         user_id, expires_str, signature = token.rsplit(".", 2)
         expires_at = int(expires_str)
-    except (ValueError, AttributeError):
+        # _sign 의 encode() 도 서로게이트 문자 등에서 UnicodeEncodeError(ValueError) 를 낼 수 있다
+        expected = _sign(f"{user_id}.{expires_at}")
+    except (ValueError, AttributeError, TypeError):
         return None
-    if not hmac.compare_digest(_sign(f"{user_id}.{expires_at}"), signature):
+    # 서명에 한글 같은 non-ASCII 가 섞여 있어도 여기서 False 로 떨어진다 (예외 아님)
+    if not _constant_time_equals(expected, signature):
         return None
     if time.time() > expires_at:
         return None
