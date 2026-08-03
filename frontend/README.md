@@ -1,23 +1,23 @@
 # 바톤 프론트엔드
 
-중고 거래 링크를 분석하고 가격, 위험 신호, 비교 결과와 거래 준비 정보를 보여주는 Expo 기반 React Native 애플리케이션입니다.
+중고 거래 상품 링크를 분석하고 가격, 상태, 위험 신호를 확인한 뒤 상품 비교와 거래 준비까지 이어갈 수 있는 Expo 기반 React Native 애플리케이션입니다. Android, iOS, Web을 하나의 코드베이스로 지원합니다.
 
-현재 프론트엔드는 저장소의 FastAPI 백엔드와 연결되어 있습니다. 백엔드가 제공하지 않는 데이터는 임의의 값으로 채우지 않고 미지원 또는 지원 예정 상태로 표시합니다.
+프론트엔드는 FastAPI 백엔드의 실제 API를 사용합니다. 서버가 제공하지 않는 값은 임의로 생성하지 않으며, 누락되었거나 아직 지원되지 않는 정보는 화면에서 별도로 안내합니다.
 
 ## 기술 스택
 
 - React Native 0.81
-- Expo SDK 54
 - React 19
-- TypeScript
-- Expo Router
+- Expo SDK 54
+- Expo Router 6
+- TypeScript 5.9
+- React Native Web
 - AsyncStorage
 - `expo-image`, `expo-image-picker`, `expo-clipboard`
-- `expo-linear-gradient`
-- `@react-native-community/datetimepicker` (거래 준비 화면의 거래 일시 입력)
-- React Native `Animated`
+- `expo-linear-gradient`, `expo-linking`
+- `@react-native-community/datetimepicker`
 
-화면은 React Native 컴포넌트와 `StyleSheet`로 구성하며 웹 전용 HTML/CSS를 사용하지 않습니다.
+화면은 React Native 컴포넌트와 `StyleSheet`로 구성하며 웹 전용 HTML/CSS 화면을 별도로 두지 않습니다. 플랫폼별 입력 방식이 필요한 부분만 `Platform.OS`로 분기합니다.
 
 ## 실행 방법
 
@@ -26,7 +26,7 @@
 - Node.js 20.19 이상
 - npm
 - Android Emulator, iOS Simulator, Expo Go 또는 웹 브라우저
-- 별도로 실행 중인 백엔드 서버
+- 접근 가능한 FastAPI 백엔드
 
 ### 설치
 
@@ -35,31 +35,33 @@ cd frontend
 npm install
 ```
 
-### 환경변수
+### 환경 변수
 
-프론트에서 필요한 환경변수는 API 서버 주소 하나입니다.
+`.env.example`을 참고해 API 서버 주소를 설정합니다.
 
 ```env
-EXPO_PUBLIC_API_BASE_URL=http://localhost:8000
+EXPO_PUBLIC_API_BASE_URL=https://baton-exc8.onrender.com/
 ```
 
-플랫폼에 따라 접근 가능한 주소가 다릅니다.
+로컬 백엔드를 사용할 때의 예시는 다음과 같습니다.
 
-| 실행 환경 | 예시 |
+| 실행 환경 | API 주소 예시 |
 | --- | --- |
 | Web / iOS Simulator | `http://localhost:8000` |
 | Android Emulator | `http://10.0.2.2:8000` |
-| Expo Go 실기기 | `http://개발-PC의-LAN-IP:8000` |
+| Expo Go 실기기 | `http://<개발-PC의-LAN-IP>:8000` |
 
-실기기와 개발 PC는 같은 네트워크에 연결되어 있어야 합니다. `.env.example`의 주소는 개발 환경에 맞게 변경합니다.
+실기기와 개발 PC는 같은 네트워크에 연결되어 있어야 합니다. `UPSTAGE_API_KEY`, `AUTH_SECRET` 등 서버 비밀값은 백엔드에서만 관리하며 `EXPO_PUBLIC_*` 변수에 넣으면 안 됩니다.
 
-`UPSTAGE_API_KEY`는 백엔드 전용입니다. 프론트 환경변수나 앱 번들에 넣지 않습니다.
+환경 변수를 변경한 뒤에는 Metro를 다시 시작해야 합니다.
 
-### Expo 실행
+### 개발 서버
 
 ```bash
 npm start
 ```
+
+플랫폼별 실행 명령은 다음과 같습니다.
 
 ```bash
 npm run android
@@ -67,117 +69,103 @@ npm run ios
 npm run web
 ```
 
-환경변수를 변경했다면 Metro를 다시 시작해야 합니다.
-
-## 사용자 흐름
+## 주요 사용자 흐름
 
 ```text
 온보딩
-  → 홈 또는 로그인/회원가입
-  → 중고 거래 URL 입력
-  → 1차 분석 요청
-  → 분석된 정보 확인 및 수정
-  → 수정 정보 저장
-  → 분석 결과
-  → 찜 / 비교 / 거래 준비
-  → 분석·비교·거래 기록 및 마이페이지
+  -> 로그인/회원가입 또는 게스트로 계속
+  -> 상품 URL 입력
+  -> 분석 요청
+  -> 추출된 상품 정보 확인 및 수정
+  -> 분석 결과 확인
+  -> 찜 / 비교 / 거래 준비
+  -> 분석·비교·거래 기록 및 마이페이지 확인
 ```
 
-이미지는 로컬 미리보기 보조 정보로만 사용할 수 있습니다. 백엔드에 이미지 업로드 API가 없으므로 이미지 단독 분석은 지원하지 않습니다.
+상품 이미지는 현재 링크 분석 결과의 미리보기 용도로 사용합니다. 프론트엔드에서 이미지를 업로드하거나 이미지 자체를 분석하는 기능은 제공하지 않습니다.
 
-## 화면과 연결 상태
+## 화면과 데이터 연결
 
-| 화면 | 경로 | 데이터 상태 |
+| 화면 | 경로 | 현재 동작 |
 | --- | --- | --- |
-| 온보딩 | `/onboarding` | 로컬 최초 실행 상태 |
-| 로그인 | `/login` | 실제 회원가입/로그인 API 연결 (guest 데이터 자동 이전 포함) |
-| 홈 | `/home` | 입력 UI, 일부 최근 매물 Mock 유지 |
-| 분석 입력 | `/analysis-input` | URL 분석 API 연결 |
-| 분석 정보 확인 | `AnalysisConfirmSheet` | 분석값 표시, 사용자 수정 및 저장 |
-| 분석 결과 | `/analysis/[analysisId]` | 분석 단건 조회 API 연결 (로컬 캐시는 보조 fallback), 시세 범위·구조화 위험신호 일부·상태 등급·판매자 설명 표시 |
-| 최근 분석 | `/recent-analyses` | history API 연결, 스와이프로 삭제(soft delete) |
-| 찜 목록 | `/saved-listings` | bookmark API 연결 |
-| 비교 | `/compare` | comparison 목록, compare API, 구조화 위험신호 탭 확장, 거래 방식 표시 |
-| 비교 기록 | `/comparison-history` | comparison-history API 연결, 스와이프로 삭제 |
-| 거래 준비 | `/trade/[analysisId]` | checklist(구조화 groups), inquiry-script(구조화 questions), price-proposal, transaction(단계·판단·일정·장소·방식·메모·결제수단), checklist-state(체크 상태 서버 동기화) API 연결 |
-| 거래 내역 | `/trade-records` | transaction API 연결 |
-| 마이페이지 | `/mypage` | 계정 정보(닉네임), 실제 집계, 최근 분석 기록, 추천 매물 |
+| 초기 진입 | `/` | 온보딩 완료 여부에 따라 진입 화면 결정 |
+| 온보딩 | `/onboarding` | 최초 실행 안내와 완료 상태 저장 |
+| 로그인 | `/login` | 아이디 회원가입·로그인, 인증 세션 저장 |
+| 홈 | `/home` | URL 입력, 클립보드 링크 감지, 최근 항목 진입 |
+| 분석 입력 | `/analysis-input` | URL 분석 요청 및 상품 정보 확인·수정 |
+| 분석 결과 | `/analysis/[analysisId]` | 가격·상태·위험·추천 결과 표시, 찜·비교·거래 준비, 원본 상품 링크 열기 |
+| 최근 분석 | `/recent-analyses` | 분석 기록 조회, 거래 준비 상품 선택, 삭제 |
+| 찜한 상품 | `/saved-listings` | 찜 목록 조회 및 해제 |
+| 비교하기 | `/compare` | 비교 후보 관리, 우선순위별 비교 실행 및 결과 표시 |
+| 비교 기록 | `/comparison-history` | 저장된 비교 결과 조회 및 삭제 |
+| 거래 준비 | `/trade/[analysisId]` | 체크리스트, 문의 문구, 가격 제안, 진행 상태와 거래 정보 관리 |
+| 거래 내역 | `/trade-records` | 서버에 저장된 거래 내역 조회 |
+| 마이페이지 | `/mypage` | 계정 정보, 집계, 최근 기록, 추천 상품, 로그아웃 |
 
-## 로그인과 사용자 ID
+### 플랫폼별 동작
 
-백엔드에 실제 회원가입/로그인, 비밀번호 해시 저장, Bearer 토큰 인증이 구현되어 있습니다.
+- 거래 일시는 Android와 iOS에서 네이티브 날짜/시간 선택기를 사용합니다.
+- Web에서는 브라우저에서 동작하는 날짜와 시간 입력을 사용하고 ISO 형식으로 서버에 저장합니다.
+- 비교하기의 빈 상태 안내는 Web의 넓은 화면에서 문장이 어색하게 끊기지 않도록 웹 전용 줄바꿈을 적용합니다.
+- 분석 결과의 원본 링크 버튼은 `Linking.openURL`을 사용해 입력했던 상품 URL을 엽니다.
 
-- `POST /api/v1/auth/signup`, `POST /api/v1/auth/login`으로 계정을 만들고 로그인합니다 (`src/services/auth-service.ts`).
-- 로그인 성공 시 토큰이 `AsyncStorage`에 저장되어 앱을 다시 실행해도 유지됩니다 (`src/storage/auth-session-storage.ts`).
-- 로그인 상태에서는 API의 `user_id`로 로그인한 계정 id를 사용합니다.
-- 비회원 상태에서는 기기에 생성한 `guest-*` ID를 사용합니다.
-- **로그인/회원가입 성공 시 이전 guest ID의 분석·찜·비교·거래 기록이 자동으로 계정에 이전됩니다** (`POST /api/v1/account/migrate-guest` 호출).
-- 로그아웃하면 로그인 세션만 삭제되고 기기의 guest ID는 새로 발급됩니다.
-- 토큰 없이 요청하면 서버가 데모 모드로 동작(클라이언트가 보낸 `user_id`를 신뢰)하지만, 프론트는 로그인 상태에서 항상 토큰을 함께 보냅니다.
+## 인증과 사용자 ID
+
+백엔드는 비밀번호 해시와 Bearer 토큰을 사용하는 아이디 인증을 제공합니다.
+
+- 회원가입: `POST /api/v1/auth/signup`
+- 로그인: `POST /api/v1/auth/login`
+- 게스트 기록 이전: `POST /api/v1/account/migrate-guest`
+- 세션 저장: `src/storage/auth-session-storage.ts`
+- 게스트 ID 저장: `src/storage/guest-id-storage.ts`
+
+로그인 세션과 게스트 ID는 AsyncStorage에 별도로 저장됩니다. 비회원 상태에서는 기기별 `guest-*` ID를 사용하고, 로그인 또는 회원가입에 성공하면 이전 게스트 기록을 계정으로 이전하도록 요청합니다.
+
+로그아웃은 현재 인증 세션을 삭제합니다. 과거 API 사용으로 생성된 비밀번호 없는 사용자 행은 일반 로그인 계정이 아니므로 로그인할 수 없습니다. 또한 서버는 보안을 위해 계정 없음, 비밀번호 불일치, 비밀번호 해시 없음 등의 경우를 모두 `LOGIN_FAILED`로 반환할 수 있습니다.
+
+개발 편의를 위한 `baton001` / `1234` 로그인은 프론트엔드의 제한된 호환 경로이며 실제 배포 계정 인증을 대신하지 않습니다.
 
 ## API 연결 구조
 
 모든 서버 요청은 `src/services`를 통합니다.
 
 ```text
-화면
-  → service
-  → 공통 api-client
-  → FastAPI /api/v1
+화면 또는 컴포넌트
+  -> 도메인 service
+  -> 공통 api-client
+  -> FastAPI /api/v1
 ```
 
-`api-client.ts`는 다음을 공통 처리합니다.
+`src/services/api-client.ts`의 공통 처리 항목은 다음과 같습니다.
 
 - `EXPO_PUBLIC_API_BASE_URL` 적용
-- Authorization 헤더 자동 첨부(로그인 상태일 때)
-- JSON Content-Type 설정
-- 30초 timeout
+- 로그인 세션이 있으면 Authorization 헤더 첨부
+- JSON 요청 헤더 설정
+- 30초 요청 timeout
 - 네트워크 오류와 timeout 구분
-- `{ ok, data, error }` envelope 해석
-- 서버 `error.code`를 보존하는 `ApiError`
+- `{ ok, data, error }` 응답 envelope 해석
+- 서버 오류 코드와 메시지를 보존하는 `ApiError`
 
-연결된 서비스:
+서비스별 역할은 다음과 같습니다.
 
-- `analysis-service.ts`: 분석 요청/단건 조회/삭제, API DTO → 화면 모델 변환, 상세 캐시
-- `history-service.ts`: 분석 기록 및 pagination
-- `bookmark-service.ts`: 찜 추가·삭제·목록
-- `comparison-service.ts`: 비교함 추가·삭제·목록, compare 요청, 비교 기록 조회
-- `trade-service.ts`: 체크리스트, 문의 스크립트, 가격 제안, 거래 상태(일정·장소·방식·메모·결제수단 포함) 저장·조회
-- `checklist-state-service.ts`: 거래 준비 체크리스트의 체크·제외 상태 서버 동기화
-- `mypage-service.ts`: 계정별 집계
-- `recommendation-service.ts`: 분석·찜 기록 기반 추천 매물
-- `listing-service.ts`: 확인 화면에서 수정한 매물 상세 정보 저장 및 현재 홈 매물 경계
-- `auth-service.ts`: 회원가입/로그인, guest 데이터 계정 이전
+| 서비스 | 역할 |
+| --- | --- |
+| `analysis-service.ts` | 분석 요청, 단건 조회·삭제, API DTO 변환, 상세 캐시 |
+| `history-service.ts` | 분석 기록 및 pagination |
+| `bookmark-service.ts` | 찜 추가·해제·목록 |
+| `comparison-service.ts` | 비교 후보 관리, 비교 실행, 비교 기록 조회 |
+| `trade-service.ts` | 체크리스트, 문의 문구, 가격 제안, 거래 상태와 상세 정보 |
+| `checklist-state-service.ts` | 체크리스트 체크·제외 상태 동기화 |
+| `mypage-service.ts` | 계정 정보와 마이페이지 집계 |
+| `recommendation-service.ts` | 기록 기반 추천 상품 |
+| `listing-service.ts` | 사용자가 확인·수정한 상품 상세 저장 |
+| `auth-service.ts` | 회원가입, 로그인, 게스트 기록 이전 |
 
-백엔드 DTO는 `src/services/api-types.ts`, 화면 모델은 `src/types/marketplace.ts`에서 분리합니다. API의 snake_case 응답을 화면에서 직접 추측하지 않습니다.
+백엔드 DTO는 `src/services/api-types.ts`, 화면 모델은 `src/types/marketplace.ts`에 분리되어 있습니다.
 
-## 데이터 저장 위치
+## 거래 준비와 거래 상태
 
-### 서버 데이터
-
-- 분석 결과와 분석 기록(soft delete 지원)
-- 찜 목록
-- 비교 목록과 비교 실행 기록(snapshot 보존)
-- 거래 단계·판단·일정·장소·방식·메모·결제수단
-- 거래 준비 체크리스트의 체크·제외 상태
-- 마이페이지 집계 및 계정 정보(닉네임)
-- 추천 매물 근거
-- 분석 후 수정한 매물 정보 중 백엔드가 지원하는 필드
-- 계정(비밀번호 해시), 로그인 토큰 발급 이력
-
-### 기기 로컬 데이터
-
-- guest ID
-- 로그인 세션(토큰)
-- 단건 조회 API를 보완하는 분석 상세 캐시(오프라인/API 실패 시 fallback)
-- 사용자가 수정한 일부 표시 정보
-- 거래 준비 화면에서 선택한 거래 방식(직거래/택배/미정 — 체크리스트 탭 전용, 서버 필드 아님)
-- 거래 준비 대상으로 사용자가 직접 선택한 상품 ID
-- 온보딩 완료 상태
-
-## 거래 상태
-
-프론트와 백엔드에서 사용하는 거래 상태는 다음과 같습니다.
+거래 준비 화면은 다음 서버 상태를 사용합니다.
 
 ```ts
 stage: 'BEFORE_CONTACT' | 'CONTACTING' | 'SCHEDULED' | 'COMPLETED'
@@ -189,25 +177,32 @@ memo: string | null
 payment_method: string | null
 ```
 
-사용자가 거래 상태를 선택하지 않으면 거래 내역에 자동 등록하지 않습니다. 저장은 매번 전체 필드를 함께 보내는 방식이라(생략 시 서버가 `NULL`로 리셋), 스테이지·판단 버튼만 눌러도 이전에 저장한 일정/장소/메모가 사라지지 않도록 화면이 항상 현재 상태 전체를 함께 전송합니다.
+사용자가 거래 상태를 선택해야 거래 내역에 표시됩니다. 상태나 판단만 변경하더라도 기존 일정, 장소, 방식, 메모, 결제 수단이 사라지지 않도록 화면이 현재 전체 상태를 함께 전송합니다.
 
-## Mock과 미지원 기능
+거래 내역과 최근 분석 화면은 로딩 실패를 화면 상태로 처리합니다. API 오류를 렌더링 단계까지 전파해 Expo 오류 화면으로 전환하지 않습니다.
 
-실제 API가 연결된 화면에서는 서버 응답과 Mock 결과를 합쳐 표시하지 않습니다.
+## 데이터 저장 위치
 
-현재 남아 있는 Mock은 실행 코드가 직접 사용하는 영역에 한정합니다.
+### 서버
 
-- 홈의 예시 최근 매물
-- 비교 UI의 백엔드 미지원 상세 행과 안내 구조(항목별 세부 평가 점수 등)
+- 분석 결과와 분석 기록
+- 찜 목록
+- 비교 후보와 비교 결과 snapshot
+- 거래 단계, 판단, 일정, 장소, 방식, 메모, 결제 수단
+- 거래 준비 체크리스트 상태
+- 계정 정보와 마이페이지 집계
+- 비밀번호 해시와 인증 관련 사용자 정보
 
-현재 백엔드에서 제공하지 않아 프론트도 지원하지 않는 것:
+### 기기 로컬 저장소
 
-- 이미지 업로드와 이미지 단독 분석
-- 상품 이미지 갤러리, 카테고리 표시, 매물 등록 시각, 판매자 프로필 링크 (백엔드 응답엔 있지만 화면에 표시할 자리가 아직 없어 연결 보류 — 디자인 확정 필요)
-- 문의 질문의 "꼭 물어볼 질문/추가로 확인하면 좋은 질문" 구분(백엔드에 필수 여부 필드가 없어 전부 첫 그룹으로 표시)
-- 가격 제안의 협상 가능 범위(min/max) 전용 UI(현재는 "이 가격을 제안한 이유" 카드에 텍스트로만 노출)
+- 인증 세션
+- 게스트 ID
+- 분석 상세 조회 보조 캐시
+- 사용자가 수정한 일부 표시 정보
+- 현재 거래 준비 대상으로 선택한 상품 ID
+- 온보딩 완료 상태
 
-지원되지 않는 데이터는 임의 생성하지 않고 기존 디자인 영역에 `현재는 미지원하는 기능입니다.` 또는 `지원 예정`으로 표시합니다.
+서버 데이터와 로컬 캐시는 역할이 다릅니다. 로컬 캐시는 서버 응답을 임의의 mock 데이터로 대체하지 않습니다.
 
 ## 프로젝트 구조
 
@@ -227,36 +222,17 @@ app/
   trade-records.tsx
 
 src/
-  components/       화면 공통 컴포넌트
-  constants/        테마 상수
-  mocks/            현재 UI가 직접 사용하는 제한적 Mock
-  repositories/     AsyncStorage 기반 로컬 상태와 캐시
-  services/         API client, DTO 및 도메인별 서버 요청
-  storage/          로그인 세션과 guest ID
-  types/            프론트 화면 모델
-  utils/            URL 검증, 분석 초안, 온보딩 저장, risk_level 매핑
+  components/       화면 및 공통 컴포넌트
+  constants/        테마와 공통 상수
+  mocks/            제한적으로 사용하는 UI 보조 데이터
+  repositories/     AsyncStorage 기반 캐시와 선택 상태
+  services/         API client, DTO, 도메인별 서버 요청
+  storage/          인증 세션과 게스트 ID
+  types/            화면 도메인 모델
+  utils/            URL 검증, 분석 초안, 위험 수준 매핑
 ```
 
-## 주요 입력 및 예외 처리
-
-- 클립보드 문자열에서 첫 번째 HTTP(S) URL을 추출합니다.
-- 클립보드에 유효한 URL이 없어도 빈 링크 입력 화면으로 이동할 수 있습니다.
-- 이미지 단독 제출은 서버 미지원 안내를 표시합니다.
-- 분석 중에는 중복 제출을 차단합니다.
-- 네트워크 오류, timeout, 서버 validation 오류를 구분합니다.
-- 기기 safe area를 적용해 하단 버튼이 시스템 내비게이션 영역 아래로 내려가지 않게 합니다.
-- 로그인 키보드가 열리면 소개 영역을 접고 로그인 폼을 위로 이동하며 스크롤을 허용합니다.
-
-## 디자인 원칙
-
-- [바톤 공유용 Figma](https://www.figma.com/design/I2LnQwZJQ1VCPd3PkeM8MZ/)를 기준으로 구현합니다.
-- 백엔드 연결을 이유로 기존 Figma 레이아웃을 임의로 변경하지 않습니다.
-- 데이터가 부족하면 화면 전체를 임시 페이지로 교체하지 않고 해당 영역만 미지원 처리합니다.
-- Figma 에셋은 `assets/images`에 저장해 사용하며 만료되는 원격 URL에 의존하지 않습니다.
-- 임의의 이모지나 다른 아이콘으로 디자인 에셋을 대체하지 않습니다.
-- Figma 스펙이 없는 새 데이터(매물 이미지 갤러리 등)는 화면에 임의로 새 UI를 만들지 않고 미연결 상태로 남깁니다.
-
-## 검사
+## 검증
 
 ```bash
 npx tsc --noEmit
@@ -264,32 +240,30 @@ npm run lint
 npm test
 ```
 
-Android 번들을 확인하려면 다음 명령을 사용할 수 있습니다.
+플랫폼 번들까지 확인하려면 다음 명령을 사용할 수 있습니다.
 
 ```bash
+npx expo export --platform web
 npx expo export --platform android
 ```
 
-수동 통합 테스트 권장 순서:
+주요 수동 확인 항목:
 
-1. 비회원으로 URL 분석
-2. 분석 정보 수정 후 결과 화면 진입
-3. 찜 추가·취소 및 목록 갱신 확인
-4. 비교함에 2~3개 상품을 추가하고 비교 실행
-5. 거래 준비 체크리스트를 선택하고 앱 재실행 후 복원 확인(서버 동기화)
-6. 거래 준비 "진행" 탭에서 일정·장소·방식·메모·결제수단을 저장하고, 이후 단계 버튼만 눌러도 값이 유지되는지 확인
-7. 거래 상태를 선택한 경우에만 거래 내역에 표시되는지 확인
-8. 회원가입 후 guest로 만들어둔 기록이 계정으로 이전되는지 확인
-9. 앱 재실행 후 로그인 유지 및 로그아웃 확인
-10. 분석 기록·비교 기록을 스와이프로 삭제하고 목록에서 사라지는지 확인
+1. 게스트 상태에서 URL을 분석하고 결과 화면에 진입할 수 있는지 확인합니다.
+2. 추출된 상품 정보를 수정한 뒤 결과와 기록에 반영되는지 확인합니다.
+3. 분석 결과에서 원본 링크, 찜, 비교, 거래 준비 버튼을 확인합니다.
+4. 비교 후보 2개 이상으로 각 우선순위 비교를 실행합니다.
+5. 거래 준비 체크리스트 상태가 화면 재진입 후에도 유지되는지 확인합니다.
+6. Web과 앱에서 거래 일시를 입력하고 다시 불러올 수 있는지 확인합니다.
+7. 거래 단계를 선택한 항목만 거래 내역에 나타나는지 확인합니다.
+8. 회원가입 후 게스트 기록이 계정으로 이전되는지 확인합니다.
+9. 로그아웃 후 실제 가입 계정으로 다시 로그인할 수 있는지 확인합니다.
+10. 분석·비교 기록 삭제와 API 실패 상태가 정상적으로 표시되는지 확인합니다.
 
-## 개발 원칙
+## 디자인 원칙
 
-- `backend/**`는 읽기 전용이며 프론트 작업에서 수정하지 않습니다.
-- 프론트 변경은 `frontend/**`로 제한합니다.
-- 백엔드 문서와 코드가 충돌하면 실제 구현을 기준으로 연결하고 충돌을 기록합니다.
-- 구현되지 않은 API나 응답 필드를 추측하지 않습니다.
-- 화면 컴포넌트에서 직접 서버 요청을 작성하지 않습니다.
-- API DTO와 UI 모델을 분리합니다.
-- 서버 데이터와 Mock 데이터를 혼합하지 않습니다.
-- 기존 디자인과 관계없는 UI를 임의로 추가하거나 변경하지 않습니다.
+- [바톤 공유 Figma](https://www.figma.com/design/I2LnQwZJQ1VCPd3PkeM8MZ/)를 기준으로 구현합니다.
+- API 연결을 이유로 기존 화면 구조와 시각 언어를 임의로 변경하지 않습니다.
+- 데이터가 없으면 전체 화면을 대체하지 않고 해당 영역에 빈 상태나 오류 상태를 표시합니다.
+- Figma 자산은 `assets/images`에 저장해 사용합니다.
+- 서버가 제공하지 않는 필드는 임의 값으로 채우지 않습니다.
