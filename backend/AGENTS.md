@@ -237,6 +237,7 @@ listing_details 행이 존재하면 defects 배열은 빈 배열이어도 사용
 
 ## 빌드 · 테스트
 
+macOS/Linux:
 ```bash
 # 설치
 cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -246,6 +247,18 @@ cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 # 테스트
 .venv/bin/python -m pytest tests/ -q
+```
+
+Windows:
+```bash
+# 설치
+cd backend && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+
+# 실행 (:8000, /docs 에 Swagger)
+.venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
+
+# 테스트
+.venv/Scripts/python -m pytest tests/ -q
 ```
 
 - Upstage 연동(선택): `cp .env.example .env` 후 `UPSTAGE_API_KEY` 입력 — 없어도 전부 동작
