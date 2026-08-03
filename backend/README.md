@@ -7,18 +7,25 @@ Backend A(AI 분석 파이프라인)와 Backend B(서비스·DB)가 같은 FastA
 
 ## 실행
 
+macOS/Linux:
 ```bash
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
+Windows:
+```bash
+cd backend
+python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+.venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
+```
+
 - Swagger 문서: http://localhost:8000/docs
 - 상태 확인: `GET /health` (→ `upstage_key`로 Solar 연동 여부 확인)
 - DB: 기본은 SQLite(`backend/resale_guard.db`, 자동 생성) — `.env`에 `DATABASE_URL`을 채우면 Postgres(Supabase)로
   자동 전환됨(코드 무변경). 자세한 건 아래 "SQLite ↔ Postgres 이중 백엔드" 참고, `.env.example` 참고
-- Upstage 연동(선택): `cp .env.example .env` 후 `UPSTAGE_API_KEY` 입력 — 없어도 Rule Engine만으로 전부 동작
-- 테스트: `.venv/bin/python -m pytest tests/ -q` (130개, A/B 전부 포함)
+- 테스트: macOS/Linux `.venv/bin/python -m pytest tests/ -q` · Windows `.venv/Scripts/python -m pytest tests/ -q` (130개, A/B 전부 포함)
 
 ## 공통 응답 형식 (팀 컨벤션)
 
