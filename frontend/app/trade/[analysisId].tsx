@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AppButton, AppTextInput, ErrorState, LoadingState } from '@/src/components/common';
+import { AppTextInput, ErrorState, LoadingState } from '@/src/components/common';
 import { Text } from '@/src/components/pretendard-text';
 import {
   TradeChecklistItem,
@@ -475,7 +475,7 @@ function PriceCard({
           {price}
         </Text>
       </View>
-      <NativeText numberOfLines={1} style={styles.priceWatermark}>
+      <NativeText style={styles.priceWatermark}>
         {watermark}
       </NativeText>
       <View style={[styles.priceCardImageFrame, imageFrameStyle]}>
@@ -496,7 +496,7 @@ function ProductCaption({ title = '상품 정보 확인 필요' }: { title?: str
   );
 }
 
-function PriceComparisonBubble({ difference }: { difference: string }) {
+function PriceComparisonBubble({ comparisonText }: { comparisonText: string }) {
   const [multiline, setMultiline] = useState(false);
 
   return (
@@ -510,29 +510,42 @@ function PriceComparisonBubble({ difference }: { difference: string }) {
             }
           }}
           style={[styles.priceBubbleText, multiline && styles.priceBubbleTextMultiline]}>
-          <Text style={styles.priceBubbleMuted}>판매가보다 </Text>
-          {difference}
-          <Text style={styles.priceBubbleMuted}> 낮아요!</Text>
+          {comparisonText}
         </Text>
       </View>
     </View>
   );
 }
 
-function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | undefined) {
-  const target = proposal?.target_price ?? result.marketPrice.average;
-  const difference = Math.abs(result.listing.price - target);
-  const reasons = [...(proposal?.reasons.length ? proposal.reasons : ['AI 가격 제안 근거는 지원 예정인 기능입니다.'])];
+function buildPriceProposalView(result: AnalysisResult, proposal: PriceProposalData | null | undefined) {
+  const target = proposal?.target_price;
+  const alreadyFair = target == null && Boolean(proposal?.message);
+  const requestFailed = proposal === null;
+  const reasons = [...(proposal?.reasons.length
+    ? proposal.reasons
+    : [requestFailed ? '가격 제안 정보를 불러오지 못했습니다.' : 'AI 가격 제안 근거는 지원 예정인 기능입니다.'])];
   const range = proposal?.negotiation_range;
   if (range) {
     reasons.push(`협상 가능 범위: ${range.min.toLocaleString('ko-KR')}원 ~ ${range.max.toLocaleString('ko-KR')}원`);
   }
+  const difference = target == null ? null : Math.max(0, result.listing.price - target);
   return {
-    targetPrice: proposal?.target_price != null ? proposal.target_price.toLocaleString('ko-KR') : '지원 예정',
+    targetPrice: target != null
+      ? target.toLocaleString('ko-KR')
+      : alreadyFair
+        ? result.listing.price.toLocaleString('ko-KR')
+        : '지원 예정',
     listedPrice: result.listing.price.toLocaleString('ko-KR'),
-    difference: `약 ${difference.toLocaleString('ko-KR')}원`,
+    comparisonText: difference != null
+      ? `판매가보다 약 ${difference.toLocaleString('ko-KR')}원 낮아요!`
+      : alreadyFair
+        ? '현재 판매가가 이미 합리적이에요!'
+        : requestFailed
+          ? '가격 비교 정보를 불러오지 못했어요.'
+          : '가격 비교는 지원 예정이에요.',
     reasons,
-    message: proposal?.message ?? '가격 제안 메시지는 지원 예정인 기능입니다.',
+    message: proposal?.message
+      ?? (requestFailed ? '가격 제안 메시지를 불러오지 못했습니다.' : '가격 제안 메시지는 지원 예정인 기능입니다.'),
   };
 }
 
@@ -542,7 +555,7 @@ function PriceStepContent({
   onCopyMessage,
 }: {
   result: AnalysisResult;
-  proposal: PriceProposalData | undefined;
+  proposal: PriceProposalData | null | undefined;
   onCopyMessage: () => void;
 }) {
   const view = buildPriceProposalView(result, proposal);
@@ -577,7 +590,7 @@ function PriceStepContent({
             />
           </View>
 
-          <PriceComparisonBubble difference={view.difference} />
+          <PriceComparisonBubble comparisonText={view.comparisonText} />
         </View>
 
         <View style={styles.priceReasonSection}>
@@ -621,6 +634,17 @@ function formatMeetingAt(value: string | null): string {
   });
 }
 
+function getWebDateTimeParts(value: string | null): { date: string; time: string } {
+  if (!value) return { date: '', time: '' };
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return { date: '', time: '' };
+  const pad = (part: number): string => String(part).padStart(2, '0');
+  return {
+    date: `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`,
+    time: `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`,
+  };
+}
+
 function MeetingDateTimeField({
   onChange,
   value,
@@ -629,14 +653,54 @@ function MeetingDateTimeField({
   value: string | null;
 }) {
   const [iosPickerVisible, setIosPickerVisible] = useState(false);
+  const initialWebParts = getWebDateTimeParts(value);
+  const [webDate, setWebDate] = useState(initialWebParts.date);
+  const [webTime, setWebTime] = useState(initialWebParts.time);
+
+  useEffect(() => {
+    const next = getWebDateTimeParts(value);
+    setWebDate(next.date);
+    setWebTime(next.time);
+  }, [value]);
+
+  const updateWebDateTime = (date: string, time: string): void => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return;
+    const parsed = new Date(`${date}T${time}:00`);
+    if (Number.isNaN(parsed.getTime())) return;
+    const normalized = getWebDateTimeParts(parsed.toISOString());
+    if (normalized.date === date && normalized.time === time) onChange(parsed.toISOString());
+  };
 
   if (Platform.OS === 'web') {
     return (
       <View style={styles.planFieldRow}>
         <Text style={styles.planFieldLabel}>거래 일시</Text>
-        <Text style={styles.planFieldWebNote}>
-          {value ? formatMeetingAt(value) : '웹에서는 아직 지원하지 않는 기능입니다.'}
-        </Text>
+        <View style={styles.planWebDateTimeRow}>
+          <TextInput
+            accessibilityLabel="거래 날짜"
+            maxLength={10}
+            onChangeText={(nextDate) => {
+              setWebDate(nextDate);
+              updateWebDateTime(nextDate, webTime);
+            }}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor="#B9BEC5"
+            style={[styles.planTextInput, styles.planWebDateInput]}
+            value={webDate}
+          />
+          <TextInput
+            accessibilityLabel="거래 시간"
+            maxLength={5}
+            onChangeText={(nextTime) => {
+              setWebTime(nextTime);
+              updateWebDateTime(webDate, nextTime);
+            }}
+            placeholder="HH:mm"
+            placeholderTextColor="#B9BEC5"
+            style={[styles.planTextInput, styles.planWebTimeInput]}
+            value={webTime}
+          />
+        </View>
       </View>
     );
   }
@@ -911,11 +975,21 @@ function ProgressStepContent({
           />
         </View>
 
-        <AppButton
+        <Pressable
+          accessibilityLabel="거래 준비 정보 저장"
+          accessibilityRole="button"
           disabled={savingPlan}
           onPress={savePlan}
-          title={savingPlan ? '저장 중...' : '거래 준비 정보 저장'}
-        />
+          style={({ pressed }) => [
+            styles.planSaveButton,
+            savingPlan && styles.planSaveButtonDisabled,
+            pressed && !savingPlan && styles.pressed,
+          ]}
+        >
+          <Text style={styles.planSaveButtonText}>
+            {savingPlan ? '저장 중...' : '거래 준비 정보 저장'}
+          </Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -933,7 +1007,7 @@ export default function TradePreparationScreen() {
   const [serverMessage, setServerMessage] = useState('');
   const [serverQuestions, setServerQuestions] = useState<TradeQuestion[]>([]);
   const [serverChecklist, setServerChecklist] = useState<TradeChecklistItem[]>([]);
-  const [priceProposal, setPriceProposal] = useState<PriceProposalData>();
+  const [priceProposal, setPriceProposal] = useState<PriceProposalData | null>();
   const [transactionStage, setTransactionStage] = useState<ApiTransactionStage | null>(null);
   const [transactionDecision, setTransactionDecision] = useState<ApiTransactionDecision | null>(null);
   const [meetingAt, setMeetingAt] = useState<string | null>(null);
@@ -992,7 +1066,7 @@ export default function TradePreparationScreen() {
             setMemo(transaction?.memo ?? '');
             setPaymentMethod(transaction?.payment_method ?? '');
           }
-          if (priceProposalResult.status === 'fulfilled') setPriceProposal(priceProposalResult.value);
+          setPriceProposal(priceProposalResult.status === 'fulfilled' ? priceProposalResult.value : null);
         }
       })
       .finally(() => {
@@ -1662,7 +1736,9 @@ const styles = StyleSheet.create({
     gap: 56,
   },
   priceSummary: {
-    paddingHorizontal: 8,
+    width: '100%',
+    maxWidth: 312,
+    alignSelf: 'center',
     gap: 29,
   },
   priceCardsRow: {
@@ -1984,11 +2060,9 @@ const styles = StyleSheet.create({
     lineHeight: 18.9,
     letterSpacing: -0.3,
   },
-  planFieldWebNote: {
-    color: '#B9BEC5',
-    fontSize: 14,
-    lineHeight: 20,
-  },
+  planWebDateTimeRow: { flexDirection: 'row', gap: 8 },
+  planWebDateInput: { flex: 2, minWidth: 0 },
+  planWebTimeInput: { flex: 1, minWidth: 0 },
   planDateTrigger: {
     minHeight: 48,
     paddingHorizontal: 16,
@@ -2020,6 +2094,22 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     letterSpacing: -0.3,
     textAlignVertical: 'top',
+  },
+  planSaveButton: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: '#8656C2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planSaveButtonDisabled: {
+    opacity: 0.7,
+  },
+  planSaveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   pressed: { opacity: 0.65 },
 });

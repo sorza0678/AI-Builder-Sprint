@@ -12,9 +12,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text } from '@/src/components/pretendard-text';
+import { ErrorState, LoadingState } from '@/src/components/common';
 import { getTransactions } from '@/src/services/trade-service';
 import type { ApiTransactionStage, TransactionItem } from '@/src/services/api-types';
-import { getTradeSelectionIds } from '@/src/repositories/trade-selection-repository';
 
 type TradeStatus = ApiTransactionStage;
 
@@ -94,11 +94,29 @@ export default function TradeRecordsScreen() {
   const [query, setQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<TradeFilter>('ALL');
   const [isListScrolled, setIsListScrolled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([getTransactions(), getTradeSelectionIds()]).then(([{ items }, selectedIds]) => {
-      setRecords(items.filter((item) => selectedIds.includes(item.item_id)));
-    });
+    let active = true;
+    setLoading(true);
+    setLoadError(null);
+    void getTransactions()
+      .then(({ items }) => {
+        if (active) setRecords(items);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setLoadError(error instanceof Error ? error.message : '거래 내역을 불러오지 못했습니다.');
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useFocusEffect(load);
@@ -165,9 +183,13 @@ export default function TradeRecordsScreen() {
         data={items}
         keyExtractor={(item) => item.id}
         ListEmptyComponent={
-          <Text style={styles.emptyText}>
-            {query ? '검색 결과가 없습니다.' : '저장된 거래 내역이 없습니다.'}
-          </Text>
+          loading
+            ? <LoadingState />
+            : loadError
+              ? <ErrorState message={loadError} onRetry={load} />
+              : <Text style={styles.emptyText}>
+                  {query ? '검색 결과가 없습니다.' : '저장된 거래 내역이 없습니다.'}
+                </Text>
         }
         onScroll={(event) => {
           const nextIsScrolled = event.nativeEvent.contentOffset.y > 0;
